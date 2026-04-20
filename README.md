@@ -99,6 +99,71 @@ var options = new VectorIndexOptions
 var query = new KnnVectorQuery("embedding", queryVector, k: 10, reader, options);
 ```
 
+### RAG (Retrieval-Augmented Generation)
+
+A typical RAG pipeline: embed your documents at index time, then at query time embed the user's question, retrieve relevant context via vector search, and pass it to an LLM.
+
+```csharp
+// --- Setup: any IEmbeddingGenerator (OpenAI, Ollama, local ONNX, etc.) ---
+IEmbeddingGenerator<string, Embedding<float>> embedder = ...;
+IChatClient chatClient = ...;
+
+// --- Index time: embed and store documents ---
+using var directory = FSDirectory.Open("my-index");
+using var analyzer = new StandardAnalyzer(LuceneVersion.LUCENE_48);
+var config = new IndexWriterConfig(LuceneVersion.LUCENE_48, analyzer);
+using var writer = new IndexWriter(directory, config);
+
+foreach (var chunk in documentChunks)
+{
+    var embedding = await embedder.GenerateAsync([chunk.Text]);
+    writer.AddDocument(new Document
+    {
+        new StringField("id", chunk.Id, Field.Store.YES),
+        new StoredField("text", chunk.Text),
+        new BinaryDocValuesField("embedding",
+            VectorSerializer.ToBytesRef(embedding[0].Vector.ToArray())),
+    });
+}
+writer.Commit();
+
+// --- Query time: embed question, retrieve context, generate answer ---
+var question = "How does photosynthesis work?";
+var questionEmbedding = await embedder.GenerateAsync([question]);
+var queryVector = questionEmbedding[0].Vector.ToArray();
+
+using var reader = DirectoryReader.Open(directory);
+var searcher = new IndexSearcher(reader);
+var query = new KnnVectorQuery("embedding", queryVector, k: 5, reader);
+var topDocs = searcher.Search(query, 5);
+
+// Gather context from top matches
+var context = string.Join("\n\n", topDocs.ScoreDocs
+    .Select(sd => searcher.Doc(sd.Doc).Get("text")));
+
+// Pass to LLM
+var response = await chatClient.GetResponseAsync($"""
+    Answer the question based on the following context:
+
+    {context}
+
+    Question: {question}
+    """);
+
+Console.WriteLine(response);
+```
+
+This composes with Lucene's full query model — you can add metadata filters, full-text search, or boost certain fields alongside the vector search:
+
+```csharp
+// RAG with metadata filter: only search recent documents
+var filteredRag = new BooleanQuery
+{
+    { NumericRangeQuery.NewInt64Range("timestamp", recentCutoff, null, true, false), Occur.MUST },
+    { new KnnVectorQuery("embedding", queryVector, k: 10, reader), Occur.MUST },
+};
+```
+
 ## Notes
 
 - **Vectors are stored in Lucene** as `BinaryDocValuesField` (4 bytes per float, little-endian). The HNSW graph is an in-memory acceleration structure built automatically from DocValues.
