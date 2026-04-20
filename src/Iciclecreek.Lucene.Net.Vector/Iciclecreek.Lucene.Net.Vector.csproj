@@ -1,15 +1,40 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+<PropertyGroup>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <Description>Library which extends Lucene.Net 4.8 with per-field vector embeddings and similarity search via KnnVectorQuery and HSNW.</Description>
+    <Company>Iciclecreek</Company>
+    <Authors>Tom Laird-McConnell</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/tomlm/Iciclecreek.Lucene.Net.Vector</PackageProjectUrl>
+    <PackageIconUrl>https://raw.githubusercontent.com/tomlm/Iciclecreek.Lucene.Net.Vector/master/icon.png</PackageIconUrl>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <RepositoryUrl>https://github.com/tomlm/Iciclecreek.Lucene.Net.Vector</RepositoryUrl>
+    <Copyright>Tom Laird-McConnell All Rights Reserved</Copyright>
+    <RootNamespace>Iciclecreek.Lucene.Net.Vector</RootNamespace>
+    <ContentTargetFolders>content</ContentTargetFolders>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>  
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="" />
+    <None Include="../../icon.png" Pack="true" PackagePath="" />
+  </ItemGroup>
+
 
   <ItemGroup>
     <PackageReference Include="HNSW" Version="26.4.177" />
     <PackageReference Include="Lucene.Net" Version="4.8.0-beta00017" />
-    <PackageReference Include="Lucene.Net.QueryParser" Version="4.8.0-beta00017" />
   </ItemGroup>
 
 </Project>

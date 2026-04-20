@@ -25,69 +25,24 @@ public class LuceneVectorIndexTests
         _directory?.Dispose();
     }
 
-    private void IndexDocuments(params (string id, float[] vector, string? text)[] docs)
+    private void IndexDocuments(params (string id, float[] vector, string? category)[] docs)
     {
         using var analyzer = new StandardAnalyzer(Version);
         var config = new IndexWriterConfig(Version, analyzer);
         using var writer = new IndexWriter(_directory, config);
 
-        foreach (var (id, vector, text) in docs)
+        foreach (var (id, vector, category) in docs)
         {
             var doc = new Document
             {
                 new StringField("id", id, Field.Store.YES),
                 new BinaryDocValuesField("embedding", VectorSerializer.ToBytesRef(vector)),
             };
-            if (text != null)
-                doc.Add(new TextField("text", text, Field.Store.YES));
+            if (category != null)
+                doc.Add(new StringField("category", category, Field.Store.YES));
             writer.AddDocument(doc);
         }
         writer.Commit();
-    }
-
-    private static float[] MakeVector(int dims, float seed)
-    {
-        var vec = new float[dims];
-        for (int i = 0; i < dims; i++)
-            vec[i] = MathF.Sin(seed + i);
-        return vec;
-    }
-
-    [Test]
-    public void BuildIndex_LoadsVectorsFromLucene()
-    {
-        IndexDocuments(
-            ("1", MakeVector(4, 1.0f), null),
-            ("2", MakeVector(4, 2.0f), null),
-            ("3", MakeVector(4, 3.0f), null));
-
-        using var reader = DirectoryReader.Open(_directory);
-        using var index = new LuceneVectorIndex("embedding");
-        index.BuildIndex(reader);
-
-        Assert.That(index.Count, Is.EqualTo(3));
-    }
-
-    [Test]
-    public void Search_ReturnsNearestNeighbors()
-    {
-        // Use unit vectors for predictable cosine distance
-        var queryVector = Normalize(new float[] { 1f, 0f, 0f, 0f });
-        IndexDocuments(
-            ("close", Normalize(new float[] { 0.9f, 0.1f, 0f, 0f }), null),
-            ("medium", Normalize(new float[] { 0.5f, 0.5f, 0f, 0f }), null),
-            ("far", Normalize(new float[] { 0f, 0f, 0f, 1f }), null));
-
-        using var reader = DirectoryReader.Open(_directory);
-        using var index = new LuceneVectorIndex("embedding",
-            new VectorIndexOptions { Distance = VectorDistanceFunction.CosineForUnits });
-        index.BuildIndex(reader);
-
-        var results = index.Search(queryVector, 3);
-
-        Assert.That(results.Count, Is.EqualTo(3));
-        // The closest vector should be first (lowest distance)
-        Assert.That(results[0].Distance, Is.LessThan(results[2].Distance));
     }
 
     private static float[] Normalize(float[] v)
@@ -97,93 +52,91 @@ public class LuceneVectorIndexTests
     }
 
     [Test]
-    public void Search_WithDocIdFilter_RestrictsResults()
+    public void KnnVectorQuery_ReturnsResults()
     {
         IndexDocuments(
             ("1", new float[] { 1f, 0f, 0f, 0f }, null),
             ("2", new float[] { 0.9f, 0.1f, 0f, 0f }, null),
-            ("3", new float[] { 0f, 1f, 0f, 0f }, null));
+            ("3", new float[] { 0f, 0f, 0f, 1f }, null));
 
         using var reader = DirectoryReader.Open(_directory);
-        using var index = new LuceneVectorIndex("embedding");
-        index.BuildIndex(reader);
+        var searcher = new IndexSearcher(reader);
+        var query = new KnnVectorQuery("embedding", new float[] { 1f, 0f, 0f, 0f }, 3, reader);
 
-        // Only allow doc IDs 1 and 2 (skip doc 0 which is closest)
-        var accepted = new HashSet<int> { 1, 2 };
-        var results = index.Search(new float[] { 1f, 0f, 0f, 0f }, 3, accepted);
+        var topDocs = searcher.Search(query, 3);
 
-        Assert.That(results.All(r => accepted.Contains(r.DocId)), Is.True);
+        Assert.That(topDocs.TotalHits, Is.EqualTo(3));
+        Assert.That(topDocs.ScoreDocs[0].Score, Is.GreaterThan(0));
     }
 
     [Test]
-    public void AddVector_IncrementallyUpdatesIndex()
+    public void KnnVectorQuery_OrdersByRelevance()
     {
         IndexDocuments(
-            ("1", new float[] { 1f, 0f, 0f, 0f }, null));
+            ("close", Normalize(new float[] { 0.95f, 0.05f, 0f, 0f }), null),
+            ("far", Normalize(new float[] { 0f, 0f, 0f, 1f }), null),
+            ("medium", Normalize(new float[] { 0.5f, 0.5f, 0f, 0f }), null));
 
         using var reader = DirectoryReader.Open(_directory);
-        using var index = new LuceneVectorIndex("embedding");
-        index.BuildIndex(reader);
+        var searcher = new IndexSearcher(reader);
+        var query = new KnnVectorQuery("embedding",
+            Normalize(new float[] { 1f, 0f, 0f, 0f }), 3, reader,
+            new VectorIndexOptions { Distance = VectorDistanceFunction.CosineForUnits });
 
-        Assert.That(index.Count, Is.EqualTo(1));
+        var topDocs = searcher.Search(query, 3);
 
-        // Add a new vector incrementally
-        index.AddVector(99, new float[] { 0f, 1f, 0f, 0f });
-
-        Assert.That(index.Count, Is.EqualTo(2));
-
-        var results = index.Search(new float[] { 0f, 1f, 0f, 0f }, 1);
-        Assert.That(results[0].DocId, Is.EqualTo(99));
+        Assert.That(topDocs.ScoreDocs[0].Score, Is.GreaterThan(topDocs.ScoreDocs[1].Score));
+        Assert.That(topDocs.ScoreDocs[1].Score, Is.GreaterThan(topDocs.ScoreDocs[2].Score));
     }
 
     [Test]
-    public void RemoveVector_ExcludesFromSearch()
+    public void KnnVectorQuery_ComposesWithBooleanQuery()
     {
         IndexDocuments(
-            ("1", new float[] { 1f, 0f, 0f, 0f }, null),
-            ("2", new float[] { 0f, 1f, 0f, 0f }, null));
+            ("1", new float[] { 1f, 0f, 0f, 0f }, "tech"),
+            ("2", new float[] { 0f, 0f, 0f, 1f }, "tech"),
+            ("3", new float[] { 0.99f, 0.01f, 0f, 0f }, "sports"));
 
         using var reader = DirectoryReader.Open(_directory);
-        using var index = new LuceneVectorIndex("embedding");
-        index.BuildIndex(reader);
+        var searcher = new IndexSearcher(reader);
+        var knnQuery = new KnnVectorQuery("embedding", new float[] { 1f, 0f, 0f, 0f }, 3, reader);
 
-        // Remove doc 0 (closest to query)
-        index.RemoveVector(0);
+        var boolQuery = new BooleanQuery
+        {
+            { new TermQuery(new Term("category", "tech")), Occur.MUST },
+            { knnQuery, Occur.MUST }
+        };
 
-        var results = index.Search(new float[] { 1f, 0f, 0f, 0f }, 2);
-        Assert.That(results.All(r => r.DocId != 0), Is.True);
+        var topDocs = searcher.Search(boolQuery, 10);
+
+        Assert.That(topDocs.TotalHits, Is.EqualTo(2));
+        foreach (var scoreDoc in topDocs.ScoreDocs)
+        {
+            var doc = searcher.Doc(scoreDoc.Doc);
+            Assert.That(doc.Get("category"), Is.EqualTo("tech"));
+        }
     }
 
     [Test]
-    public void Serialize_Deserialize_RoundTrips()
+    public void KnnVectorQuery_WithBoost_ScalesScores()
     {
-        IndexDocuments(
-            ("1", new float[] { 1f, 0f, 0f, 0f }, null),
-            ("2", new float[] { 0f, 1f, 0f, 0f }, null),
-            ("3", new float[] { 0f, 0f, 1f, 0f }, null));
+        IndexDocuments(("1", new float[] { 1f, 0f, 0f, 0f }, null));
 
         using var reader = DirectoryReader.Open(_directory);
-        using var index = new LuceneVectorIndex("embedding");
-        index.BuildIndex(reader);
+        var searcher = new IndexSearcher(reader);
 
-        // Serialize
-        using var ms = new MemoryStream();
-        index.Serialize(ms);
-        ms.Position = 0;
+        var query1 = new KnnVectorQuery("embedding", new float[] { 1f, 0f, 0f, 0f }, 1, reader);
+        var topDocs1 = searcher.Search(query1, 1);
 
-        // Deserialize
-        using var restored = LuceneVectorIndex.Deserialize(ms, "embedding");
+        var query2 = new KnnVectorQuery("embedding", new float[] { 1f, 0f, 0f, 0f }, 1, reader) { Boost = 2.0f };
+        var topDocs2 = searcher.Search(query2, 1);
 
-        Assert.That(restored.Count, Is.EqualTo(3));
-
-        // Search should still work
-        var results = restored.Search(new float[] { 1f, 0f, 0f, 0f }, 1);
-        Assert.That(results.Count, Is.EqualTo(1));
-        Assert.That(results[0].DocId, Is.EqualTo(0));
+        Assert.That(topDocs2.ScoreDocs[0].Score,
+            Is.EqualTo(topDocs1.ScoreDocs[0].Score * 2.0f).Within(0.001f));
     }
 
     [Test]
-    public void Search_EmptyIndex_ReturnsEmpty()
+    public void KnnVectorQuery_EmptyIndex_ReturnsNoResults()
     {
         using var analyzer = new StandardAnalyzer(Version);
         var config = new IndexWriterConfig(Version, analyzer);
@@ -193,11 +146,39 @@ public class LuceneVectorIndexTests
         writer.Dispose();
 
         using var reader = DirectoryReader.Open(_directory);
-        using var index = new LuceneVectorIndex("embedding");
-        index.BuildIndex(reader);
+        var searcher = new IndexSearcher(reader);
+        var query = new KnnVectorQuery("embedding", new float[] { 1f, 0f }, 5, reader);
 
-        var results = index.Search(new float[] { 1f, 0f }, 5);
-        Assert.That(results, Is.Empty);
+        var topDocs = searcher.Search(query, 5);
+        Assert.That(topDocs.TotalHits, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void KnnVectorQuery_ToString_ReturnsDescription()
+    {
+        IndexDocuments(("1", new float[] { 1f, 0f }, null));
+        using var reader = DirectoryReader.Open(_directory);
+        var query = new KnnVectorQuery("embedding", new float[] { 1f, 0f }, 10, reader);
+
+        var str = query.ToString();
+        Assert.That(str, Does.Contain("KnnVectorQuery"));
+        Assert.That(str, Does.Contain("embedding"));
+        Assert.That(str, Does.Contain("10"));
+    }
+
+    [Test]
+    public void KnnVectorQuery_Equality()
+    {
+        IndexDocuments(("1", new float[] { 1f, 0f }, null));
+        using var reader = DirectoryReader.Open(_directory);
+        var vec = new float[] { 1f, 0f };
+        var q1 = new KnnVectorQuery("embedding", vec, 10, reader);
+        var q2 = new KnnVectorQuery("embedding", vec, 10, reader);
+        var q3 = new KnnVectorQuery("embedding", vec, 5, reader);
+
+        Assert.That(q1, Is.EqualTo(q2));
+        Assert.That(q1, Is.Not.EqualTo(q3));
+        Assert.That(q1.GetHashCode(), Is.EqualTo(q2.GetHashCode()));
     }
 
     [Test]
@@ -211,15 +192,13 @@ public class LuceneVectorIndexTests
     }
 
     [Test]
-    public void DeletedLuceneDocs_ExcludedFromVectorSearch()
+    public void DeletedDocs_ExcludedFromVectorSearch()
     {
-        // Index 3 documents
         IndexDocuments(
             ("1", new float[] { 1f, 0f, 0f, 0f }, null),
             ("2", new float[] { 0.9f, 0.1f, 0f, 0f }, null),
             ("3", new float[] { 0f, 0f, 0f, 1f }, null));
 
-        // Delete doc "1" (the closest to our query vector) via Lucene
         using var analyzer = new StandardAnalyzer(Version);
         var config = new IndexWriterConfig(Version, analyzer);
         using (var writer = new IndexWriter(_directory, config))
@@ -228,69 +207,29 @@ public class LuceneVectorIndexTests
             writer.Commit();
         }
 
-        // Rebuild index from the updated reader — deleted doc should be excluded
         using var reader = DirectoryReader.Open(_directory);
-        using var index = new LuceneVectorIndex("embedding");
-        index.BuildIndex(reader);
-
-        Assert.That(index.Count, Is.EqualTo(2), "Deleted doc should not be in the HNSW index");
-
-        var results = index.Search(new float[] { 1f, 0f, 0f, 0f }, 3);
-
-        // Verify deleted doc's vector is not in results
         var searcher = new IndexSearcher(reader);
-        foreach (var result in results)
-        {
-            var doc = searcher.Doc(result.DocId);
-            Assert.That(doc.Get("id"), Is.Not.EqualTo("1"),
-                "Deleted document should not appear in vector search results");
-        }
-    }
+        var query = new KnnVectorQuery("embedding", new float[] { 1f, 0f, 0f, 0f }, 3, reader);
 
-    [Test]
-    public void DeletedLuceneDocs_ExcludedFromKnnVectorQuery()
-    {
-        IndexDocuments(
-            ("1", new float[] { 1f, 0f, 0f, 0f }, "keep"),
-            ("2", new float[] { 0.95f, 0.05f, 0f, 0f }, "delete"),
-            ("3", new float[] { 0f, 0f, 0f, 1f }, "keep"));
-
-        // Delete doc "2" which is very close to our query
-        using var analyzer = new StandardAnalyzer(Version);
-        var config = new IndexWriterConfig(Version, analyzer);
-        using (var writer = new IndexWriter(_directory, config))
-        {
-            writer.DeleteDocuments(new Term("id", "2"));
-            writer.Commit();
-        }
-
-        using var reader = DirectoryReader.Open(_directory);
-        using var index = new LuceneVectorIndex("embedding");
-        index.BuildIndex(reader);
-
-        var searcher = new IndexSearcher(reader);
-        var query = new KnnVectorQuery("embedding", new float[] { 1f, 0f, 0f, 0f }, 3, index);
         var topDocs = searcher.Search(query, 10);
 
         Assert.That(topDocs.TotalHits, Is.EqualTo(2));
         foreach (var scoreDoc in topDocs.ScoreDocs)
         {
             var doc = searcher.Doc(scoreDoc.Doc);
-            Assert.That(doc.Get("id"), Is.Not.EqualTo("2"),
-                "Deleted document should not appear in KnnVectorQuery results");
+            Assert.That(doc.Get("id"), Is.Not.EqualTo("1"),
+                "Deleted document should not appear in vector search results");
         }
     }
 
     [Test]
-    public void UpdatedLuceneDocs_ReflectedInVectorSearch()
+    public void UpdatedDocs_ReflectedInVectorSearch()
     {
-        // Use unit vectors with CosineForUnits for predictable distances
         IndexDocuments(
             ("1", Normalize(new float[] { 1f, 0f, 0f, 0f }), null),
             ("2", Normalize(new float[] { 0f, 1f, 0f, 0f }), null),
             ("3", Normalize(new float[] { 0f, 0f, 1f, 0f }), null));
 
-        // Update doc "1" — was near [1,0,0,0], now near [0,0,0,1]
         using var analyzer = new StandardAnalyzer(Version);
         var config = new IndexWriterConfig(Version, analyzer);
         using (var writer = new IndexWriter(_directory, config))
@@ -306,23 +245,163 @@ public class LuceneVectorIndexTests
             writer.Commit();
         }
 
-        // Rebuild — should see the updated vector
         using var reader = DirectoryReader.Open(_directory);
-        using var index = new LuceneVectorIndex("embedding",
-            new VectorIndexOptions { Distance = VectorDistanceFunction.CosineForUnits });
-        index.BuildIndex(reader);
-
-        // Query for the NEW vector — doc "1" should now be closest to [0,0,0,1]
-        var results = index.Search(Normalize(new float[] { 0f, 0f, 0f, 1f }), 1);
         var searcher = new IndexSearcher(reader);
-        var topDoc = searcher.Doc(results[0].DocId);
-        Assert.That(topDoc.Get("id"), Is.EqualTo("1"),
-            "Updated document should be found by its new vector");
+        var options = new VectorIndexOptions { Distance = VectorDistanceFunction.CosineForUnits };
 
-        // Query for the OLD vector [1,0,0,0] — doc "1" should NOT be closest anymore
-        var results2 = index.Search(Normalize(new float[] { 1f, 0f, 0f, 0f }), 1);
-        var topDoc2 = searcher.Doc(results2[0].DocId);
-        Assert.That(topDoc2.Get("id"), Is.Not.EqualTo("1"),
-            "Updated document should not match its old vector");
+        // Query for the NEW vector — doc "1" should be closest
+        var query1 = new KnnVectorQuery("embedding",
+            Normalize(new float[] { 0f, 0f, 0f, 1f }), 1, reader, options);
+        var topDocs1 = searcher.Search(query1, 1);
+        Assert.That(searcher.Doc(topDocs1.ScoreDocs[0].Doc).Get("id"), Is.EqualTo("1"));
+
+        // Query for the OLD vector — doc "1" should NOT be closest
+        var query2 = new KnnVectorQuery("embedding",
+            Normalize(new float[] { 1f, 0f, 0f, 0f }), 1, reader, options);
+        var topDocs2 = searcher.Search(query2, 1);
+        Assert.That(searcher.Doc(topDocs2.ScoreDocs[0].Doc).Get("id"), Is.Not.EqualTo("1"));
+    }
+
+    [Test]
+    public void VectorsPersistInDocValues_SurviveFullRoundTrip()
+    {
+        var vectors = new Dictionary<string, float[]>
+        {
+            ["doc1"] = Normalize(new float[] { 1f, 0f, 0f, 0f }),
+            ["doc2"] = Normalize(new float[] { 0f, 1f, 0f, 0f }),
+            ["doc3"] = Normalize(new float[] { 0f, 0f, 1f, 0f }),
+            ["doc4"] = Normalize(new float[] { 0.7f, 0.7f, 0f, 0f }),
+        };
+
+        // Phase 1: Write documents, commit, dispose writer
+        {
+            using var analyzer = new StandardAnalyzer(Version);
+            var config = new IndexWriterConfig(Version, analyzer);
+            using var writer = new IndexWriter(_directory, config);
+
+            foreach (var (id, vector) in vectors)
+            {
+                var doc = new Document
+                {
+                    new StringField("id", id, Field.Store.YES),
+                    new StringField("category", id.Contains("1") || id.Contains("4") ? "groupA" : "groupB", Field.Store.YES),
+                    new BinaryDocValuesField("embedding", VectorSerializer.ToBytesRef(vector)),
+                };
+                writer.AddDocument(doc);
+            }
+            writer.Commit();
+        }
+
+        // Phase 2: Open fresh reader, verify raw DocValues round-trip
+        {
+            using var reader = DirectoryReader.Open(_directory);
+            foreach (var leaf in reader.Leaves)
+            {
+                var docValues = leaf.AtomicReader.GetBinaryDocValues("embedding");
+                Assert.That(docValues, Is.Not.Null);
+
+                for (int i = 0; i < leaf.AtomicReader.MaxDoc; i++)
+                {
+                    var storedDoc = leaf.AtomicReader.Document(i);
+                    var id = storedDoc.Get("id");
+
+                    var bytesRef = new BytesRef();
+                    docValues.Get(i, bytesRef);
+                    var recovered = VectorSerializer.FromBytesRef(bytesRef);
+
+                    Assert.That(recovered, Is.EqualTo(vectors[id]).Within(0.0001f));
+                }
+            }
+        }
+
+        // Phase 3: Open another fresh reader, run KNN queries
+        {
+            using var reader = DirectoryReader.Open(_directory);
+            var searcher = new IndexSearcher(reader);
+            var options = new VectorIndexOptions { Distance = VectorDistanceFunction.CosineForUnits };
+
+            // Pure vector search
+            var query1 = new KnnVectorQuery("embedding",
+                Normalize(new float[] { 0f, 1f, 0f, 0f }), 4, reader, options);
+            var topDocs1 = searcher.Search(query1, 4);
+
+            Assert.That(topDocs1.TotalHits, Is.EqualTo(4));
+            Assert.That(searcher.Doc(topDocs1.ScoreDocs[0].Doc).Get("id"), Is.EqualTo("doc2"));
+            Assert.That(topDocs1.ScoreDocs[0].Score, Is.GreaterThan(topDocs1.ScoreDocs[3].Score));
+
+            // Filtered KNN
+            var filteredQuery = new BooleanQuery
+            {
+                { new TermQuery(new Term("category", "groupB")), Occur.MUST },
+                { new KnnVectorQuery("embedding",
+                    Normalize(new float[] { 0f, 0f, 1f, 0f }), 4, reader, options), Occur.MUST }
+            };
+            var filteredDocs = searcher.Search(filteredQuery, 10);
+
+            Assert.That(filteredDocs.TotalHits, Is.EqualTo(2));
+            foreach (var sd in filteredDocs.ScoreDocs)
+                Assert.That(searcher.Doc(sd.Doc).Get("category"), Is.EqualTo("groupB"));
+            Assert.That(searcher.Doc(filteredDocs.ScoreDocs[0].Doc).Get("id"), Is.EqualTo("doc3"));
+        }
+    }
+
+    [Test]
+    public void HnswGraphIsCachedPerReader()
+    {
+        IndexDocuments(
+            ("1", new float[] { 1f, 0f, 0f, 0f }, null),
+            ("2", new float[] { 0f, 1f, 0f, 0f }, null));
+
+        using var reader = DirectoryReader.Open(_directory);
+        var searcher = new IndexSearcher(reader);
+
+        // Two queries on the same reader should both work (cache hit on second)
+        var query1 = new KnnVectorQuery("embedding", new float[] { 1f, 0f, 0f, 0f }, 2, reader);
+        var topDocs1 = searcher.Search(query1, 2);
+        Assert.That(topDocs1.TotalHits, Is.EqualTo(2));
+
+        var query2 = new KnnVectorQuery("embedding", new float[] { 0f, 1f, 0f, 0f }, 2, reader);
+        var topDocs2 = searcher.Search(query2, 2);
+        Assert.That(topDocs2.TotalHits, Is.EqualTo(2));
+
+        // Results should differ based on query vector
+        Assert.That(topDocs1.ScoreDocs[0].Doc, Is.Not.EqualTo(topDocs2.ScoreDocs[0].Doc));
+    }
+
+    [Test]
+    public void DimensionMismatch_ThrowsOnSearch()
+    {
+        // Index 4-dimensional vectors
+        IndexDocuments(
+            ("1", new float[] { 1f, 0f, 0f, 0f }, null),
+            ("2", new float[] { 0f, 1f, 0f, 0f }, null));
+
+        using var reader = DirectoryReader.Open(_directory);
+        var searcher = new IndexSearcher(reader);
+
+        // Search with a 3-dimensional vector — should throw
+        var query = new KnnVectorQuery("embedding", new float[] { 1f, 0f, 0f }, 2, reader);
+        var ex = Assert.Throws<ArgumentException>(() => searcher.Search(query, 2));
+        Assert.That(ex!.Message, Does.Contain("3 dimensions").And.Contain("4"));
+    }
+
+    [Test]
+    public void Warmup_PreBuildsHnswIndex()
+    {
+        IndexDocuments(
+            ("1", new float[] { 1f, 0f, 0f, 0f }, null),
+            ("2", new float[] { 0f, 1f, 0f, 0f }, null));
+
+        using var reader = DirectoryReader.Open(_directory);
+
+        // Warmup builds the index before any query
+        KnnVectorQuery.Warmup(reader, "embedding");
+
+        // Subsequent query should use the cached index
+        var searcher = new IndexSearcher(reader);
+        var query = new KnnVectorQuery("embedding", new float[] { 1f, 0f, 0f, 0f }, 2, reader);
+        var topDocs = searcher.Search(query, 2);
+
+        Assert.That(topDocs.TotalHits, Is.EqualTo(2));
     }
 }

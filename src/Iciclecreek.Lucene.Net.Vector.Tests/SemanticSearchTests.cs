@@ -55,7 +55,6 @@ public class SemanticSearchTests
         var config = new IndexWriterConfig(Version, analyzer);
         using var writer = new IndexWriter(_directory, config);
 
-        // Batch embed all texts at once
         var texts = docs.Select(d => d.text).ToList();
         var embeddings = await _generator.GenerateAsync(texts);
 
@@ -87,15 +86,14 @@ public class SemanticSearchTests
             ("5", "Neural networks learn from examples", null));
 
         using var reader = DirectoryReader.Open(_directory);
-        using var index = new LuceneVectorIndex("embedding");
-        index.BuildIndex(reader);
-
-        var queryVector = await GetVectors("A small cat sleeping on a carpet");
-        var results = index.Search(queryVector, 5);
-
-        var topDocIds = results.Take(2).Select(r => r.DocId).ToHashSet();
         var searcher = new IndexSearcher(reader);
-        var topTexts = topDocIds.Select(docId => searcher.Doc(docId).Get("text")).ToList();
+        var queryVector = await GetVectors("A small cat sleeping on a carpet");
+        var query = new KnnVectorQuery("embedding", queryVector, 5, reader);
+
+        var topDocs = searcher.Search(query, 2);
+        var topTexts = topDocs.ScoreDocs
+            .Select(sd => searcher.Doc(sd.Doc).Get("text"))
+            .ToList();
 
         Assert.That(topTexts, Has.Some.Contain("cat").Or.Contain("kitten"),
             $"Expected cat/kitten docs in top results, got: {string.Join(", ", topTexts)}");
@@ -112,14 +110,14 @@ public class SemanticSearchTests
             ("5", "Cooking pasta requires boiling water", null));
 
         using var reader = DirectoryReader.Open(_directory);
-        using var index = new LuceneVectorIndex("embedding");
-        index.BuildIndex(reader);
-
-        var queryVector = await GetVectors("software development and coding");
-        var results = index.Search(queryVector, 2);
-
         var searcher = new IndexSearcher(reader);
-        var topTexts = results.Select(r => searcher.Doc(r.DocId).Get("text")).ToList();
+        var queryVector = await GetVectors("software development and coding");
+        var query = new KnnVectorQuery("embedding", queryVector, 2, reader);
+
+        var topDocs = searcher.Search(query, 2);
+        var topTexts = topDocs.ScoreDocs
+            .Select(sd => searcher.Doc(sd.Doc).Get("text"))
+            .ToList();
 
         Assert.That(topTexts, Has.Some.Contain("Python").Or.Contain("JavaScript"),
             $"Expected programming docs in top results, got: {string.Join(", ", topTexts)}");
@@ -136,15 +134,11 @@ public class SemanticSearchTests
             ("5", "Investors are worried about inflation rates", "finance"));
 
         using var reader = DirectoryReader.Open(_directory);
-        using var index = new LuceneVectorIndex("embedding");
-        index.BuildIndex(reader);
-
         var searcher = new IndexSearcher(reader);
         var queryVector = await GetVectors("financial markets and economic trends");
-        var query = new KnnVectorQuery("embedding", queryVector, 5, index);
+        var query = new KnnVectorQuery("embedding", queryVector, 5, reader);
 
         var topDocs = searcher.Search(query, 3);
-
         var categories = topDocs.ScoreDocs
             .Select(sd => searcher.Doc(sd.Doc).Get("category"))
             .ToList();
@@ -164,16 +158,13 @@ public class SemanticSearchTests
             ("5", "Investors are worried about inflation rates", "finance"));
 
         using var reader = DirectoryReader.Open(_directory);
-        using var index = new LuceneVectorIndex("embedding");
-        index.BuildIndex(reader);
-
         var searcher = new IndexSearcher(reader);
         var queryVector = await GetVectors("recent discoveries in biology and astronomy");
 
         var boolQuery = new BooleanQuery
         {
             { new TermQuery(new Term("category", "science")), Occur.MUST },
-            { new KnnVectorQuery("embedding", queryVector, 5, index), Occur.MUST }
+            { new KnnVectorQuery("embedding", queryVector, 5, reader), Occur.MUST }
         };
 
         var topDocs = searcher.Search(boolQuery, 10);
@@ -226,16 +217,12 @@ public class SemanticSearchTests
             ("5", "The senator gave a speech on immigration policy", "politics"));
 
         using var reader = DirectoryReader.Open(_directory);
-        using var index = new LuceneVectorIndex("embedding");
-        index.BuildIndex(reader);
-
         var searcher = new IndexSearcher(reader);
         var queryVector = await GetVectors("government legislation and policy");
-        var query = new KnnVectorQuery("embedding", queryVector, 5, index);
+        var query = new KnnVectorQuery("embedding", queryVector, 5, reader);
 
         var topDocs = searcher.Search(query, 5);
 
-        // Verify scores are in descending order (Lucene sorts by score)
         for (int i = 0; i < topDocs.ScoreDocs.Length - 1; i++)
         {
             Assert.That(topDocs.ScoreDocs[i].Score,
@@ -243,7 +230,6 @@ public class SemanticSearchTests
                 $"Results should be ranked by similarity score (index {i} vs {i + 1})");
         }
 
-        // Politics docs should rank higher than tech docs for this query
         var rankedCategories = topDocs.ScoreDocs
             .Select(sd => searcher.Doc(sd.Doc).Get("category"))
             .ToList();
@@ -266,31 +252,23 @@ public class SemanticSearchTests
             ("5", "Data analysis and visualization with Python", "programming"));
 
         using var reader = DirectoryReader.Open(_directory);
-        using var index = new LuceneVectorIndex("embedding");
-        index.BuildIndex(reader);
-
         var searcher = new IndexSearcher(reader);
         var queryVector = await GetVectors("building AI and deep learning models");
-        var knnQuery = new KnnVectorQuery("embedding", queryVector, 5, index);
 
-        // Combine: must be "programming" category + ranked by vector similarity to AI/ML
         var hybridQuery = new BooleanQuery
         {
             { new TermQuery(new Term("category", "programming")), Occur.MUST },
-            { knnQuery, Occur.MUST }
+            { new KnnVectorQuery("embedding", queryVector, 5, reader), Occur.MUST }
         };
 
         var topDocs = searcher.Search(hybridQuery, 10);
 
-        // Should exclude the "animals" doc about python snakes
         Assert.That(topDocs.TotalHits, Is.EqualTo(4));
 
-        // The ML/data docs should rank higher than the web framework docs
         var topText = searcher.Doc(topDocs.ScoreDocs[0].Doc).Get("text");
         Assert.That(topText, Does.Contain("Machine learning").Or.Contain("Data analysis"),
             $"Expected ML/data doc ranked first, got: {topText}");
 
-        // All results should be programming category
         foreach (var sd in topDocs.ScoreDocs)
         {
             Assert.That(searcher.Doc(sd.Doc).Get("category"), Is.EqualTo("programming"));

@@ -5,7 +5,10 @@ using global::Lucene.Net.Util;
 namespace Iciclecreek.Lucene.Net.Vector;
 
 /// <summary>
-/// A Lucene Query that performs approximate nearest neighbor search using an HNSW index.
+/// A Lucene Query that performs approximate nearest neighbor search over vectors
+/// stored as BinaryDocValuesField. The HNSW index is built and cached automatically
+/// per (IndexReader, fieldName) — no manual index management required.
+///
 /// Composes naturally with BooleanQuery for filtered or hybrid search.
 /// </summary>
 public class KnnVectorQuery : Query
@@ -13,19 +16,30 @@ public class KnnVectorQuery : Query
     private readonly string _field;
     private readonly float[] _queryVector;
     private readonly int _k;
-    private readonly LuceneVectorIndex _vectorIndex;
+    private readonly IndexReader _reader;
+    private readonly VectorIndexOptions? _options;
 
-    public KnnVectorQuery(string field, float[] queryVector, int k, LuceneVectorIndex vectorIndex)
+    public KnnVectorQuery(string field, float[] queryVector, int k, IndexReader reader, VectorIndexOptions? options = null)
     {
         _field = field ?? throw new ArgumentNullException(nameof(field));
         _queryVector = queryVector ?? throw new ArgumentNullException(nameof(queryVector));
         _k = k;
-        _vectorIndex = vectorIndex ?? throw new ArgumentNullException(nameof(vectorIndex));
+        _reader = reader ?? throw new ArgumentNullException(nameof(reader));
+        _options = options;
     }
 
     public string Field => _field;
     public float[] QueryVector => _queryVector;
     public int K => _k;
+
+    /// <summary>
+    /// Pre-build the HNSW index for the given reader and field so the first query
+    /// doesn't pay the build cost. Safe to call multiple times — subsequent calls are no-ops.
+    /// </summary>
+    public static void Warmup(IndexReader reader, string field, VectorIndexOptions? options = null)
+    {
+        VectorIndexCache.GetOrBuild(reader, field, options);
+    }
 
     public override Weight CreateWeight(IndexSearcher searcher)
     {
@@ -43,7 +57,7 @@ public class KnnVectorQuery : Query
             return false;
         return _field == other._field
             && _k == other._k
-            && ReferenceEquals(_vectorIndex, other._vectorIndex)
+            && ReferenceEquals(_reader, other._reader)
             && _queryVector.AsSpan().SequenceEqual(other._queryVector)
             && Boost == other.Boost;
     }
@@ -91,14 +105,12 @@ public class KnnVectorQuery : Query
 
         public override void Normalize(float norm, float topLevelBoost)
         {
-            // Vector scores are self-contained; no normalization needed
         }
 
         public override Scorer GetScorer(AtomicReaderContext context, IBits? acceptDocs)
         {
             EnsureScoresComputed();
 
-            // Build list of (docId, score) for this segment
             var segmentResults = new List<(int Doc, float Score)>();
             int docBase = context.DocBase;
             int maxDoc = context.AtomicReader.MaxDoc;
@@ -127,7 +139,10 @@ public class KnnVectorQuery : Query
             if (_scores != null)
                 return;
 
-            var results = _query._vectorIndex.Search(
+            var vectorIndex = VectorIndexCache.GetOrBuild(
+                _query._reader, _query._field, _query._options);
+
+            var results = vectorIndex.Search(
                 _query._queryVector,
                 _query._k);
 
