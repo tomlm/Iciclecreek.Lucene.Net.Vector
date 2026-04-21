@@ -1,17 +1,18 @@
-using Iciclecreek.Lucene.Net.Vector;
 using Lucene.Net.Analysis.Standard;
 using Lucene.Net.Documents;
 using Lucene.Net.Index;
 using Lucene.Net.Search;
 using Lucene.Net.Store;
 using Lucene.Net.Util;
+using ElBruno.LocalEmbeddings;
 using Microsoft.Extensions.AI;
+using ElBruno.LocalEmbeddings.Options;
 
 namespace Iciclecreek.Lucene.Net.Vector.Tests;
 
 /// <summary>
 /// End-to-end tests using real embeddings via the standard IEmbeddingGenerator interface,
-/// backed by SmartComponents.LocalEmbeddings (bge-micro-v2 model).
+/// backed by ElBruno.LocalEmbeddings (bge-micro-v2 model).
 /// </summary>
 public class SemanticSearchTests
 {
@@ -22,7 +23,11 @@ public class SemanticSearchTests
     [OneTimeSetUp]
     public void OneTimeSetUp()
     {
-        _generator = new LocalEmbedderGenerator();
+        _generator = new LocalEmbeddingGenerator(new LocalEmbeddingsOptions
+        {
+            ModelName = "SmartComponents/bge-micro-v2",
+            PreferQuantized = true
+        });
     }
 
     [OneTimeTearDown]
