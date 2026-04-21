@@ -1,13 +1,14 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>net10.0</TargetFrameworks>
+    <TargetFrameworks>netstandard2.0;net8.0;net10.0</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
-<PropertyGroup>
-    <Version>1.0.2</Version>
-    <AssemblyVersion>1.0.2.0</AssemblyVersion>
+  <PropertyGroup>
+    <Version>2.0.0</Version>
+    <AssemblyVersion>2.0.0.0</AssemblyVersion>
     <Description>Adds support for vector embeddings to Lucene.Net 4.8, supporting similarity search and RAG patterns.</Description>
     <Company>Iciclecreek</Company>
     <Authors>Tom Laird-McConnell</Authors>
@@ -22,7 +23,7 @@
     <RootNamespace>Iciclecreek.Lucene.Net.Vector</RootNamespace>
     <ContentTargetFolders>content</ContentTargetFolders>
     <IncludeSymbols>true</IncludeSymbols>
-    <SymbolPackageFormat>snupkg</SymbolPackageFormat>  
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
   </PropertyGroup>
 
@@ -33,8 +34,11 @@
 
 
   <ItemGroup>
-    <PackageReference Include="HNSW" Version="26.4.177" />
     <PackageReference Include="Lucene.Net" Version="4.8.0-beta00017" />
+    <PackageReference Include="System.Numerics.Vectors" Version="4.5.0"
+                      Condition="'$(TargetFramework)' == 'netstandard2.0'" />
+    <PackageReference Include="HNSW" Version="26.4.177"
+                      Condition="'$(TargetFramework)' == 'net10.0'"/>
   </ItemGroup>
-
 </Project>
+2

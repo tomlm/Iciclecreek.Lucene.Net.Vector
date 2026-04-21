@@ -1,3 +1,4 @@
+#if NET10_0_OR_GREATER
 using System.Runtime.CompilerServices;
 using global::Lucene.Net.Index;
 
@@ -68,3 +69,4 @@ internal static class VectorIndexCache
         }
     }
 }
+#endif

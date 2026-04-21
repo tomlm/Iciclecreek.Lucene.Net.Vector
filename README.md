@@ -3,18 +3,18 @@
 
 Adds vector similarity search to Lucene.Net 4.8.
 
-Embeddings are stored as `BinaryDocValuesField` and queried through `KnnVectorQuery`, a native Lucene `Query` that composes with `BooleanQuery` for filtered and hybrid search. An HNSW index is built and cached automatically per `IndexReader` — no manual index management required.
+Embeddings are stored as `BinaryDocValuesField` and queried through standard Lucene `Query` classes that compose with `BooleanQuery` for filtered and hybrid search.
+
+The library multi-targets `netstandard2.0`, `net8.0`, and `net10.0`:
+- **.NET 10+**: uses HNSW approximate nearest neighbor search (fast, via `KnnVectorQuery`)
+- **All runtimes**: brute-force cosine similarity with SIMD acceleration (exact, via `CosineVectorQuery`)
+- **`VectorQuery`**: smart wrapper that picks the best implementation automatically
 
 ## Installation
 
 ```bash
 dotnet add package Iciclecreek.Lucene.Net.Vector
 ```
-
-### Dependencies
-
-- [Lucene.Net](https://www.nuget.org/packages/Lucene.Net/) 4.8.0-beta00017
-- [HNSW](https://www.nuget.org/packages/HNSW/) (Microsoft HNSW.Net — SIMD cosine distance)
 
 ## Usage
 
@@ -40,13 +40,12 @@ writer.Commit();
 
 ### Vector search
 
-`KnnVectorQuery` is a standard Lucene `Query` — use it with `IndexSearcher` like any other query:
+`VectorQuery` is the recommended entry point -- it selects HNSW or brute-force automatically:
 
 ```csharp
 using var reader = DirectoryReader.Open(directory);
 var searcher = new IndexSearcher(reader);
-var queryVector = GetVector(userQuery) 
-var query = new KnnVectorQuery("embedding", queryVector, k: 10, reader);
+var query = new VectorQuery("embedding", queryVector, k: 10, reader);
 var topDocs = searcher.Search(query, 10);
 
 foreach (var scoreDoc in topDocs.ScoreDocs)
@@ -56,24 +55,32 @@ foreach (var scoreDoc in topDocs.ScoreDocs)
 }
 ```
 
-The HNSW index is built automatically on the first query and cached for the lifetime of the `IndexReader`.
+### Query classes
+
+| Class | Runtime | Algorithm |
+| --- | --- | --- |
+| `VectorQuery` | All | Auto-selects best available model for runtime|
+| `CosineVectorQuery` | All | cosine similarity (SIMD-accelerated) |
+| `KnnVectorQuery` | .NET 10+ | HNSW approximate nearest neighbor |
+
+All three extend `Lucene.Net.Search.Query` and compose naturally with `BooleanQuery`.
 
 ### Filtered search
 
-Compose `KnnVectorQuery` with `BooleanQuery` to combine vector similarity with field filters:
+Compose any vector query with `BooleanQuery` to combine similarity with field filters:
 
 ```csharp
 var boolQuery = new BooleanQuery
 {
     { new TermQuery(new Term("category", "animals")), Occur.MUST },
-    { new KnnVectorQuery("embedding", queryVector, k: 10, reader), Occur.MUST },
+    { new VectorQuery("embedding", queryVector, k: 10, reader), Occur.MUST },
 };
 var topDocs = searcher.Search(boolQuery, 10);
 ```
 
 ### After updates
 
-When you add, update, or delete documents, open a new reader — the HNSW index rebuilds automatically:
+When you add, update, or delete documents, open a new reader -- the HNSW index rebuilds automatically:
 
 ```csharp
 writer.DeleteDocuments(new Term("id", "old-doc"));
@@ -81,13 +88,12 @@ writer.Commit();
 
 using var newReader = DirectoryReader.Open(directory);
 var searcher = new IndexSearcher(newReader);
-// KnnVectorQuery will build a fresh HNSW index from the new reader's DocValues
-var query = new KnnVectorQuery("embedding", queryVector, k: 10, newReader);
+var query = new VectorQuery("embedding", queryVector, k: 10, newReader);
 ```
 
-### HNSW options
+### HNSW options (.NET 10+)
 
-Pass `VectorIndexOptions` to tune the HNSW graph:
+Pass `VectorIndexOptions` to tune the HNSW graph when using `KnnVectorQuery` or `VectorQuery`:
 
 ```csharp
 var options = new VectorIndexOptions
@@ -97,8 +103,10 @@ var options = new VectorIndexOptions
     EfSearch = 50,                                 // Search quality (default: 50)
     Distance = VectorDistanceFunction.Cosine,      // Distance function (default: Cosine)
 };
-var query = new KnnVectorQuery("embedding", queryVector, k: 10, reader, options);
+var query = new VectorQuery("embedding", queryVector, k: 10, reader, options);
 ```
+
+On runtimes without HNSW, options are accepted but ignored -- `CosineVectorQuery` is used instead.
 
 ### RAG (Retrieval-Augmented Generation)
 
@@ -135,7 +143,7 @@ var queryVector = questionEmbedding[0].Vector.ToArray();
 
 using var reader = DirectoryReader.Open(directory);
 var searcher = new IndexSearcher(reader);
-var query = new KnnVectorQuery("embedding", queryVector, k: 5, reader);
+var query = new VectorQuery("embedding", queryVector, k: 5, reader);
 var topDocs = searcher.Search(query, 5);
 
 // Gather context from top matches
@@ -161,16 +169,21 @@ This composes with Lucene's full query model — you can add metadata filters, f
 var filteredRag = new BooleanQuery
 {
     { NumericRangeQuery.NewInt64Range("timestamp", recentCutoff, null, true, false), Occur.MUST },
-    { new KnnVectorQuery("embedding", queryVector, k: 10, reader), Occur.MUST },
+    { new VectorQuery("embedding", queryVector, k: 10, reader), Occur.MUST },
 };
 ```
+
+### Utilities
+
+- **`VectorSerializer`** — converts between `float[]` and Lucene's `BytesRef`/`byte[]` for storage
+- **`VectorMath`** — SIMD-accelerated cosine similarity and vector norm utilities
 
 ## Notes
 
 - **Vectors are stored in Lucene** as `BinaryDocValuesField` (4 bytes per float, little-endian). The HNSW graph is an in-memory acceleration structure built automatically from DocValues.
 - **HNSW caching** — the graph is cached per `(IndexReader, fieldName)`. Since an `IndexReader` is an immutable snapshot, the cached graph is valid for the reader's entire lifetime. Opening a new reader after commits triggers a fresh build.
-- **Deleted documents** are automatically excluded — Lucene's `LiveDocs` filtering ensures deleted docs are not loaded into the HNSW graph.
-- **Distance functions**: `Cosine` (general purpose, handles unnormalized vectors) and `CosineForUnits` (faster, requires pre-normalized unit vectors).
+- **Deleted documents** are automatically excluded — Lucene's `LiveDocs` filtering ensures deleted docs are not loaded into the HNSW graph or evaluated by brute-force search.
+- **Distance functions**: `Cosine` (general purpose, handles unnormalized vectors) and `CosineForUnits` (faster, requires pre-normalized unit vectors). These apply to HNSW only; `CosineVectorQuery` always uses cosine similarity.
 
 ## License
 

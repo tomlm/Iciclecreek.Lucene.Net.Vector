@@ -1,3 +1,4 @@
+#if NET10_0_OR_GREATER
 using HNSW.Net;
 using global::Lucene.Net.Index;
 using global::Lucene.Net.Search;
@@ -160,15 +161,4 @@ internal class LuceneVectorIndex : IDisposable
         }
     }
 }
-
-/// <summary>
-/// Result of a vector similarity search.
-/// </summary>
-public readonly record struct SearchResult(int DocId, float Distance)
-{
-    /// <summary>
-    /// Converts the distance to a Lucene-compatible relevance score.
-    /// Higher scores indicate more similar documents.
-    /// </summary>
-    public float Score => 1f / (1f + Distance);
-}
+#endif

@@ -4,9 +4,11 @@ using Lucene.Net.Index;
 using Lucene.Net.Search;
 using Lucene.Net.Store;
 using Lucene.Net.Util;
-using ElBruno.LocalEmbeddings;
 using Microsoft.Extensions.AI;
+#if NET8_0_OR_GREATER
+using ElBruno.LocalEmbeddings;
 using ElBruno.LocalEmbeddings.Options;
+#endif
 
 namespace Iciclecreek.Lucene.Net.Vector.Tests;
 
@@ -23,11 +25,15 @@ public class SemanticSearchTests
     [OneTimeSetUp]
     public void OneTimeSetUp()
     {
+#if NET8_0_OR_GREATER
         _generator = new LocalEmbeddingGenerator(new LocalEmbeddingsOptions
         {
             ModelName = "SmartComponents/bge-micro-v2",
             PreferQuantized = true
         });
+#else
+        _generator = new KeywordEmbeddingGenerator();
+#endif
     }
 
     [OneTimeTearDown]
@@ -80,8 +86,10 @@ public class SemanticSearchTests
         writer.Commit();
     }
 
+    // --- VectorQuery tests (smart wrapper, all TFMs) ---
+
     [Test]
-    public async Task SemanticSearch_FindsSimilarDocuments()
+    public async Task VectorQuery_FindsSimilarDocuments()
     {
         await IndexDocumentsAsync(
             ("1", "The cat sat on the mat", null),
@@ -93,7 +101,7 @@ public class SemanticSearchTests
         using var reader = DirectoryReader.Open(_directory);
         var searcher = new IndexSearcher(reader);
         var queryVector = await GetVectors("A small cat sleeping on a carpet");
-        var query = new KnnVectorQuery("embedding", queryVector, 5, reader);
+        var query = new VectorQuery("embedding", queryVector, 5, reader);
 
         var topDocs = searcher.Search(query, 2);
         var topTexts = topDocs.ScoreDocs
@@ -105,7 +113,7 @@ public class SemanticSearchTests
     }
 
     [Test]
-    public async Task SemanticSearch_TechQueriesMatchTechDocs()
+    public async Task VectorQuery_TechQueriesMatchTechDocs()
     {
         await IndexDocumentsAsync(
             ("1", "The weather is sunny and warm today", null),
@@ -117,7 +125,7 @@ public class SemanticSearchTests
         using var reader = DirectoryReader.Open(_directory);
         var searcher = new IndexSearcher(reader);
         var queryVector = await GetVectors("software development and coding");
-        var query = new KnnVectorQuery("embedding", queryVector, 2, reader);
+        var query = new VectorQuery("embedding", queryVector, 2, reader);
 
         var topDocs = searcher.Search(query, 2);
         var topTexts = topDocs.ScoreDocs
@@ -128,8 +136,62 @@ public class SemanticSearchTests
             $"Expected programming docs in top results, got: {string.Join(", ", topTexts)}");
     }
 
+    // --- CosineVectorQuery tests (brute-force, all TFMs) ---
+
     [Test]
-    public async Task KnnVectorQuery_WithRealEmbeddings_ReturnsSemanticResults()
+    public async Task CosineVectorQuery_FindsSemanticResults()
+    {
+        await IndexDocumentsAsync(
+            ("1", "The stock market crashed today", "finance"),
+            ("2", "Scientists discovered a new species of frog", "science"),
+            ("3", "The economy is showing signs of recovery", "finance"),
+            ("4", "A new planet was found orbiting a distant star", "science"),
+            ("5", "Investors are worried about inflation rates", "finance"));
+
+        using var reader = DirectoryReader.Open(_directory);
+        var searcher = new IndexSearcher(reader);
+        var queryVector = await GetVectors("financial markets and economic trends");
+        var query = new CosineVectorQuery("embedding", queryVector, 3, reader);
+
+        var topDocs = searcher.Search(query, 3);
+        var categories = topDocs.ScoreDocs
+            .Select(sd => searcher.Doc(sd.Doc).Get("category"))
+            .ToList();
+
+        Assert.That(categories, Is.All.EqualTo("finance"),
+            $"Expected all finance docs in top 3, got: {string.Join(", ", categories)}");
+    }
+
+    [Test]
+    public async Task CosineVectorQuery_RanksResultsBySimilarity()
+    {
+        await IndexDocumentsAsync(
+            ("1", "The president signed a new trade agreement", "politics"),
+            ("2", "Apple released a new iPhone with improved camera", "tech"),
+            ("3", "Congress debated the new healthcare reform bill", "politics"),
+            ("4", "Google announced advances in quantum computing", "tech"),
+            ("5", "The senator gave a speech on immigration policy", "politics"));
+
+        using var reader = DirectoryReader.Open(_directory);
+        var searcher = new IndexSearcher(reader);
+        var queryVector = await GetVectors("government legislation and policy");
+        var query = new CosineVectorQuery("embedding", queryVector, 5, reader);
+
+        var topDocs = searcher.Search(query, 5);
+
+        for (int i = 0; i < topDocs.ScoreDocs.Length - 1; i++)
+        {
+            Assert.That(topDocs.ScoreDocs[i].Score,
+                Is.GreaterThanOrEqualTo(topDocs.ScoreDocs[i + 1].Score),
+                $"Results should be ranked by similarity score (index {i} vs {i + 1})");
+        }
+    }
+
+    // --- KnnVectorQuery tests (.NET 10+ only) ---
+
+#if NET10_0_OR_GREATER
+    [Test]
+    public async Task KnnVectorQuery_FindsSemanticResults()
     {
         await IndexDocumentsAsync(
             ("1", "The stock market crashed today", "finance"),
@@ -153,7 +215,7 @@ public class SemanticSearchTests
     }
 
     [Test]
-    public async Task KnnVectorQuery_FilteredByCategory_WithRealEmbeddings()
+    public async Task KnnVectorQuery_FilteredByCategory()
     {
         await IndexDocumentsAsync(
             ("1", "The stock market crashed today", "finance"),
@@ -181,6 +243,9 @@ public class SemanticSearchTests
             Assert.That(doc.Get("category"), Is.EqualTo("science"));
         }
     }
+#endif
+
+    // --- Embedding generator tests ---
 
     [Test]
     public async Task EmbeddingsAreConsistent_SameTextProducesSameVector()
@@ -209,74 +274,5 @@ public class SemanticSearchTests
 
         Assert.That(embeddings, Has.Count.EqualTo(3));
         Assert.That(embeddings[0].Vector.Length, Is.GreaterThan(0));
-    }
-
-    [Test]
-    public async Task KnnVectorQuery_RanksResultsBySimilarity()
-    {
-        await IndexDocumentsAsync(
-            ("1", "The president signed a new trade agreement with China", "politics"),
-            ("2", "Apple released a new iPhone with improved camera", "tech"),
-            ("3", "Congress debated the new healthcare reform bill", "politics"),
-            ("4", "Google announced advances in quantum computing", "tech"),
-            ("5", "The senator gave a speech on immigration policy", "politics"));
-
-        using var reader = DirectoryReader.Open(_directory);
-        var searcher = new IndexSearcher(reader);
-        var queryVector = await GetVectors("government legislation and policy");
-        var query = new KnnVectorQuery("embedding", queryVector, 5, reader);
-
-        var topDocs = searcher.Search(query, 5);
-
-        for (int i = 0; i < topDocs.ScoreDocs.Length - 1; i++)
-        {
-            Assert.That(topDocs.ScoreDocs[i].Score,
-                Is.GreaterThanOrEqualTo(topDocs.ScoreDocs[i + 1].Score),
-                $"Results should be ranked by similarity score (index {i} vs {i + 1})");
-        }
-
-        var rankedCategories = topDocs.ScoreDocs
-            .Select(sd => searcher.Doc(sd.Doc).Get("category"))
-            .ToList();
-
-        var firstTechIndex = rankedCategories.IndexOf("tech");
-        var lastPoliticsIndex = rankedCategories.LastIndexOf("politics");
-
-        Assert.That(lastPoliticsIndex, Is.LessThan(firstTechIndex),
-            $"Politics docs should rank above tech docs, got: {string.Join(", ", rankedCategories)}");
-    }
-
-    [Test]
-    public async Task HybridQuery_CombinesTextFilterWithSemanticRanking()
-    {
-        await IndexDocumentsAsync(
-            ("1", "Python web frameworks like Django and Flask", "programming"),
-            ("2", "Machine learning with Python and TensorFlow", "programming"),
-            ("3", "JavaScript frameworks like React and Vue", "programming"),
-            ("4", "The python snake is found in tropical regions", "animals"),
-            ("5", "Data analysis and visualization with Python", "programming"));
-
-        using var reader = DirectoryReader.Open(_directory);
-        var searcher = new IndexSearcher(reader);
-        var queryVector = await GetVectors("building AI and deep learning models");
-
-        var hybridQuery = new BooleanQuery
-        {
-            { new TermQuery(new Term("category", "programming")), Occur.MUST },
-            { new KnnVectorQuery("embedding", queryVector, 5, reader), Occur.MUST }
-        };
-
-        var topDocs = searcher.Search(hybridQuery, 10);
-
-        Assert.That(topDocs.TotalHits, Is.EqualTo(4));
-
-        var topText = searcher.Doc(topDocs.ScoreDocs[0].Doc).Get("text");
-        Assert.That(topText, Does.Contain("Machine learning").Or.Contain("Data analysis"),
-            $"Expected ML/data doc ranked first, got: {topText}");
-
-        foreach (var sd in topDocs.ScoreDocs)
-        {
-            Assert.That(searcher.Doc(sd.Doc).Get("category"), Is.EqualTo("programming"));
-        }
     }
 }

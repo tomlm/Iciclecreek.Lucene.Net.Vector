@@ -1,4 +1,6 @@
-#if NET10_0_OR_GREATER
+using System;
+using System.Collections.Generic;
+using System.Numerics;
 using global::Lucene.Net.Index;
 using global::Lucene.Net.Search;
 using global::Lucene.Net.Util;
@@ -6,60 +8,48 @@ using global::Lucene.Net.Util;
 namespace Iciclecreek.Lucene.Net.Vector;
 
 /// <summary>
-/// A Lucene Query that performs approximate nearest neighbor search over vectors
-/// stored as BinaryDocValuesField. The HNSW index is built and cached automatically
-/// per (IndexReader, fieldName) — no manual index management required.
+/// A Lucene Query that performs exact nearest neighbor search using
+/// brute-force cosine similarity over vectors stored as BinaryDocValuesField.
+/// Uses SIMD acceleration via <see cref="Vector{T}"/> when available.
 ///
-/// Composes naturally with BooleanQuery for filtered or hybrid search.
+/// For approximate (faster) search on .NET 10+, use <see cref="VectorQuery"/>
+/// which automatically selects HNSW when available.
 /// </summary>
-public class KnnVectorQuery : Query
+public class CosineVectorQuery : Query
 {
     private readonly string _field;
     private readonly float[] _queryVector;
     private readonly int _k;
     private readonly IndexReader _reader;
-    private readonly VectorIndexOptions? _options;
 
-    public KnnVectorQuery(string field, float[] queryVector, int k, IndexReader reader, VectorIndexOptions? options = null)
+    public CosineVectorQuery(string field, float[] queryVector, int k, IndexReader reader)
     {
         _field = field ?? throw new ArgumentNullException(nameof(field));
         _queryVector = queryVector ?? throw new ArgumentNullException(nameof(queryVector));
         _k = k;
         _reader = reader ?? throw new ArgumentNullException(nameof(reader));
-        _options = options;
     }
 
     public string Field => _field;
     public float[] QueryVector => _queryVector;
     public int K => _k;
 
-    /// <summary>
-    /// Pre-build the HNSW index for the given reader and field so the first query
-    /// doesn't pay the build cost. Safe to call multiple times — subsequent calls are no-ops.
-    /// </summary>
-    public static void Warmup(IndexReader reader, string field, VectorIndexOptions? options = null)
-    {
-        VectorIndexCache.GetOrBuild(reader, field, options);
-    }
-
     public override Weight CreateWeight(IndexSearcher searcher)
     {
-        return new KnnVectorWeight(this, searcher);
+        return new CosineVectorWeight(this, searcher);
     }
 
     public override string ToString(string field)
     {
-        return $"KnnVectorQuery(field={_field}, k={_k}, boost={Boost})";
+        return $"CosineVectorQuery(field={_field}, k={_k}, boost={Boost})";
     }
 
-    public override bool Equals(object? obj)
+    public override bool Equals(object obj)
     {
-        if (obj is not KnnVectorQuery other)
+        if (!(obj is CosineVectorQuery other))
             return false;
         return _field == other._field
             && _k == other._k
-            && ReferenceEquals(_reader, other._reader)
-            && _queryVector.AsSpan().SequenceEqual(other._queryVector)
             && Boost == other.Boost;
     }
 
@@ -68,18 +58,16 @@ public class KnnVectorQuery : Query
         int hash = _field.GetHashCode();
         hash = 31 * hash + _k;
         hash = 31 * hash + Boost.GetHashCode();
-        if (_queryVector.Length > 0)
-            hash = 31 * hash + _queryVector[0].GetHashCode();
         return hash;
     }
 
-    private class KnnVectorWeight : Weight
+    private class CosineVectorWeight : Weight
     {
-        private readonly KnnVectorQuery _query;
+        private readonly CosineVectorQuery _query;
         private readonly IndexSearcher _searcher;
-        private Dictionary<int, float>? _scores;
+        private Dictionary<int, float> _scores;
 
-        public KnnVectorWeight(KnnVectorQuery query, IndexSearcher searcher)
+        public CosineVectorWeight(CosineVectorQuery query, IndexSearcher searcher)
             : base()
         {
             _query = query;
@@ -92,9 +80,9 @@ public class KnnVectorQuery : Query
         {
             var globalDocId = context.DocBase + doc;
             EnsureScoresComputed();
-            if (_scores!.TryGetValue(globalDocId, out var score))
+            if (_scores.TryGetValue(globalDocId, out var score))
             {
-                return new Explanation(score, $"KnnVectorQuery(field={_query._field}, k={_query._k}), distance-based score");
+                return new Explanation(score, $"CosineVectorQuery(field={_query._field}, k={_query._k}), cosine similarity score");
             }
             return new Explanation(0f, "no vector match");
         }
@@ -108,7 +96,7 @@ public class KnnVectorQuery : Query
         {
         }
 
-        public override Scorer GetScorer(AtomicReaderContext context, IBits? acceptDocs)
+        public override Scorer GetScorer(AtomicReaderContext context, IBits acceptDocs)
         {
             EnsureScoresComputed();
 
@@ -116,23 +104,23 @@ public class KnnVectorQuery : Query
             int docBase = context.DocBase;
             int maxDoc = context.AtomicReader.MaxDoc;
 
-            foreach (var (globalDocId, score) in _scores!)
+            foreach (var kvp in _scores)
             {
-                int localDoc = globalDocId - docBase;
+                int localDoc = kvp.Key - docBase;
                 if (localDoc < 0 || localDoc >= maxDoc)
                     continue;
 
                 if (acceptDocs != null && !acceptDocs.Get(localDoc))
                     continue;
 
-                segmentResults.Add((localDoc, score));
+                segmentResults.Add((localDoc, kvp.Value));
             }
 
             if (segmentResults.Count == 0)
-                return null!;
+                return null;
 
             segmentResults.Sort((a, b) => a.Doc.CompareTo(b.Doc));
-            return new KnnVectorScorer(this, segmentResults);
+            return new CosineVectorScorer(this, segmentResults);
         }
 
         private void EnsureScoresComputed()
@@ -140,28 +128,63 @@ public class KnnVectorQuery : Query
             if (_scores != null)
                 return;
 
-            var vectorIndex = VectorIndexCache.GetOrBuild(
-                _query._reader, _query._field, _query._options);
+            var queryVector = _query._queryVector;
+            var queryNorm = VectorMath.Norm(queryVector);
+            var boost = _query.Boost;
 
-            var results = vectorIndex.Search(
-                _query._queryVector,
-                _query._k);
+            // Collect all (docId, distance) pairs
+            var allResults = new List<SearchResult>();
 
-            _scores = new Dictionary<int, float>(results.Count);
-            float boost = _query.Boost;
-            foreach (var result in results)
+            var leaves = _query._reader.Leaves;
+            foreach (var leaf in leaves)
             {
-                _scores[result.DocId] = result.Score * boost;
+                var atomicReader = leaf.AtomicReader;
+                var docValues = atomicReader.GetBinaryDocValues(_query._field);
+                if (docValues == null)
+                    continue;
+
+                var liveDocs = atomicReader.LiveDocs;
+                for (int docId = 0; docId < atomicReader.MaxDoc; docId++)
+                {
+                    if (liveDocs != null && !liveDocs.Get(docId))
+                        continue;
+
+                    var bytesRef = new BytesRef();
+                    docValues.Get(docId, bytesRef);
+
+                    if (bytesRef.Length == 0)
+                        continue;
+
+                    var docVector = VectorSerializer.FromBytesRef(bytesRef);
+                    if (docVector.Length != queryVector.Length)
+                        continue;
+
+                    var similarity = VectorMath.CosineSimilarity(queryVector, docVector, queryNorm);
+                    var distance = 1f - similarity;
+                    var globalDocId = leaf.DocBase + docId;
+
+                    allResults.Add(new SearchResult(globalDocId, distance));
+                }
+            }
+
+            // Sort by distance ascending (most similar first), take top K
+            allResults.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+            var topK = Math.Min(_query._k, allResults.Count);
+
+            _scores = new Dictionary<int, float>(topK);
+            for (int i = 0; i < topK; i++)
+            {
+                _scores[allResults[i].DocId] = allResults[i].Score * boost;
             }
         }
     }
 
-    private class KnnVectorScorer : Scorer
+    private class CosineVectorScorer : Scorer
     {
         private readonly List<(int Doc, float Score)> _results;
         private int _currentIndex = -1;
 
-        public KnnVectorScorer(Weight weight, List<(int Doc, float Score)> results)
+        public CosineVectorScorer(Weight weight, List<(int Doc, float Score)> results)
             : base(weight)
         {
             _results = results;
@@ -204,4 +227,3 @@ public class KnnVectorQuery : Query
         public override int Freq => 1;
     }
 }
-#endif

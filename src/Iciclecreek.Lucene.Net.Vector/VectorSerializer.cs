@@ -37,12 +37,18 @@ public static class VectorSerializer
 
     public static BytesRef ToBytesRef(ReadOnlyMemory<float> vector)
     {
-        var bytes = new byte[vector.Length * sizeof(float)];
+        var length = vector.Length;
+        var bytes = new byte[length * sizeof(float)];
+#if NETSTANDARD2_0
+        var array = vector.ToArray();
+        Buffer.BlockCopy(array, 0, bytes, 0, bytes.Length);
+#else
         var span = vector.Span;
         for (int i = 0; i < span.Length; i++)
         {
             BitConverter.TryWriteBytes(bytes.AsSpan(i * sizeof(float)), span[i]);
         }
+#endif
         return new BytesRef(bytes);
     }
 
