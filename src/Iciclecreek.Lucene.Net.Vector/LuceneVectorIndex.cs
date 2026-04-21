@@ -139,10 +139,11 @@ internal class LuceneVectorIndex : IDisposable
 
     private static Func<float[], float[], float> GetDistanceFunction(VectorDistanceFunction distance)
     {
+        var simd = System.Numerics.Vector.IsHardwareAccelerated;
         return distance switch
         {
-            VectorDistanceFunction.Cosine => CosineDistance.SIMD,
-            VectorDistanceFunction.CosineForUnits => CosineDistance.SIMDForUnits,
+            VectorDistanceFunction.Cosine => simd ? CosineDistance.SIMD : CosineDistance.NonOptimized,
+            VectorDistanceFunction.CosineForUnits => simd ? CosineDistance.SIMDForUnits : CosineDistance.ForUnits,
             _ => throw new ArgumentOutOfRangeException(nameof(distance))
         };
     }

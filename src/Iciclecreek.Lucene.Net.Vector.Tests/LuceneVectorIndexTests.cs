@@ -1,4 +1,5 @@
 using Iciclecreek.Lucene.Net.Vector;
+using System.Reflection;
 using Lucene.Net.Analysis.Standard;
 using Lucene.Net.Documents;
 using Lucene.Net.Index;
@@ -49,6 +50,17 @@ public class LuceneVectorIndexTests
     {
         var mag = MathF.Sqrt(v.Sum(x => x * x));
         return v.Select(x => x / mag).ToArray();
+    }
+
+    private static bool IsReaderCached(IndexReader reader)
+    {
+        var cacheType = typeof(KnnVectorQuery).Assembly.GetType("Iciclecreek.Lucene.Net.Vector.VectorIndexCache", throwOnError: true)!;
+        var cacheField = cacheType.GetField("_cache", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var cache = cacheField.GetValue(null)!;
+        var tryGetValue = cache.GetType().GetMethod("TryGetValue")!;
+        var arguments = new object?[] { reader, null };
+
+        return (bool)tryGetValue.Invoke(cache, arguments)!;
     }
 
     [Test]
@@ -403,5 +415,22 @@ public class LuceneVectorIndexTests
         var topDocs = searcher.Search(query, 2);
 
         Assert.That(topDocs.TotalHits, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void CacheEntryIsRemovedWhenReaderIsDisposed()
+    {
+        IndexDocuments(
+            ("1", new float[] { 1f, 0f, 0f, 0f }, null),
+            ("2", new float[] { 0f, 1f, 0f, 0f }, null));
+
+        using var reader = DirectoryReader.Open(_directory);
+
+        KnnVectorQuery.Warmup(reader, "embedding");
+        Assert.That(IsReaderCached(reader), Is.True);
+
+        reader.Dispose();
+
+        Assert.That(IsReaderCached(reader), Is.False);
     }
 }

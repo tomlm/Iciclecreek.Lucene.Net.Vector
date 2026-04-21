@@ -14,6 +14,7 @@ internal static class VectorIndexCache
     // the cache entry (and its HNSW graph) is automatically cleaned up.
     private static readonly ConditionalWeakTable<IndexReader, Dictionary<string, LuceneVectorIndex>> _cache = new();
     private static readonly object _lock = new();
+    private static readonly IReaderDisposedListener _readerDisposedListener = new ReaderDisposedListener();
 
     /// <summary>
     /// Get or build the HNSW index for the given reader and field.
@@ -27,6 +28,7 @@ internal static class VectorIndexCache
         lock (_lock)
         {
             fieldMap = _cache.GetOrCreateValue(reader);
+            reader.AddReaderDisposedListener(_readerDisposedListener);
         }
 
         lock (fieldMap)
@@ -38,6 +40,31 @@ internal static class VectorIndexCache
             index.BuildIndex(reader);
             fieldMap[fieldName] = index;
             return index;
+        }
+    }
+
+    private sealed class ReaderDisposedListener : IReaderDisposedListener
+    {
+        public void OnDispose(IndexReader reader)
+        {
+            if (!_cache.TryGetValue(reader, out var fieldMap))
+                return;
+
+            List<LuceneVectorIndex> indexesToDispose;
+
+            lock (fieldMap)
+            {
+                indexesToDispose = new List<LuceneVectorIndex>(fieldMap.Count);
+                foreach (var index in fieldMap.Values)
+                    indexesToDispose.Add(index);
+
+                fieldMap.Clear();
+            }
+
+            _cache.Remove(reader);
+
+            foreach (var index in indexesToDispose)
+                index.Dispose();
         }
     }
 }
