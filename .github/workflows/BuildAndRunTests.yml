@@ -31,5 +31,8 @@ jobs:
     - name: Build
       run: dotnet build --no-restore src/Iciclecreek.Lucene.Net.Vector.slnx --property WarningLevel=0
       
-    - name: Test
-      run: dotnet test --no-build --verbosity normal src/Iciclecreek.Lucene.Net.Vector.slnx
+    - name: Test Net8.0
+      run: dotnet test --no-build --verbosity normal src/Iciclecreek.Lucene.Net.Vector.slnx --framework net8.0
+    
+    - name: Test Net10.0
+      run: dotnet test --no-build --verbosity normal src/Iciclecreek.Lucene.Net.Vector.slnx --framework net10.0
