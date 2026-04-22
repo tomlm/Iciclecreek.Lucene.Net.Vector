@@ -59,7 +59,7 @@ foreach (var scoreDoc in topDocs.ScoreDocs)
 
 | Class | Runtime | Algorithm | Use case |
 | --- | --- | --- | --- |
-| `VectorQuery` | All | Auto-selects best available for runtime | Top-K nearest neighbor search |
+| `VectorQuery` | All | Auto-selects between CosineVectorQuery and KnnVectorQuery for runtime  | Top-K nearest neighbor search |
 | `CosineVectorQuery` | All | Brute-force cosine similarity (SIMD) | Top-K nearest neighbor search |
 | `KnnVectorQuery` | .NET 10+ | HNSW approximate nearest neighbor | Top-K nearest neighbor search |
 | `VectorScoreQuery` | All | Cosine re-scoring via `CustomScoreQuery` | Re-rank results from any Lucene query |
