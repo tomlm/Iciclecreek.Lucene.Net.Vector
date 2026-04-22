@@ -1,4 +1,5 @@
-![logo](https://github.com/user-attachments/assets/4220c13d-b6ba-446a-8a17-02109c017584)
+![logo](https://raw.githubusercontent.com/tomlm/Iciclecreek.Lucene.Net.Vector/main/icon.png?raw=true)
+
 # Iciclecreek.Lucene.Net.Vector
 
 Adds vector similarity search to Lucene.Net 4.8.
