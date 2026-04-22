@@ -14,7 +14,6 @@
     <Authors>Tom Laird-McConnell</Authors>
     <PackageTags>Lucene.Net;Vector Search;Similarity Search;RAG;Retrieval-Augmented Generation;AI;Machine Learning</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/tomlm/Iciclecreek.Lucene.Net.Vector</PackageProjectUrl>
     <PackageIconUrl>https://raw.githubusercontent.com/tomlm/Iciclecreek.Lucene.Net.Vector/master/icon.png</PackageIconUrl>
     <PackageIcon>icon.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
