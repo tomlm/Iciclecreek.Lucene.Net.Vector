@@ -1,5 +1,7 @@
 ![logo](https://raw.githubusercontent.com/tomlm/Iciclecreek.Lucene.Net.Vector/main/icon.png?raw=true)
 
+![Build and Tests](https://github.com/tomlm/Iciclecreek.Lucene.Net.Vector/actions/workflows/BuildAndRunTests.yml/badge.svg?branch=main) ![NuGet](https://img.shields.io/nuget/v/Iciclecreek.Lucene.Net.Vector.svg)
+
 # Iciclecreek.Lucene.Net.Vector
 
 Adds vector similarity search to Lucene.Net 4.8.
