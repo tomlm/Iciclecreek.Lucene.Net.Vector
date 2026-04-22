@@ -57,13 +57,16 @@ foreach (var scoreDoc in topDocs.ScoreDocs)
 
 ### Query classes
 
-| Class | Runtime | Algorithm |
-| --- | --- | --- |
-| `VectorQuery` | All | Auto-selects best available model for runtime|
-| `CosineVectorQuery` | All | cosine similarity (SIMD-accelerated) |
-| `KnnVectorQuery` | .NET 10+ | HNSW approximate nearest neighbor |
+| Class | Runtime | Algorithm | Use case |
+| --- | --- | --- | --- |
+| `VectorQuery` | All | Auto-selects best available for runtime | Top-K nearest neighbor search |
+| `CosineVectorQuery` | All | Brute-force cosine similarity (SIMD) | Top-K nearest neighbor search |
+| `KnnVectorQuery` | .NET 10+ | HNSW approximate nearest neighbor | Top-K nearest neighbor search |
+| `VectorScoreQuery` | All | Cosine re-scoring via `CustomScoreQuery` | Re-rank results from any Lucene query |
 
-All three extend `Lucene.Net.Search.Query` and compose naturally with `BooleanQuery`.
+The first three find the K most similar vectors and return them as results. `VectorScoreQuery` does the opposite — it takes an existing query that controls which documents match, and replaces the score with cosine similarity. This is useful when you already have a filter or full-text query selecting documents and want to rank them by vector similarity without a separate top-K pass.
+
+All four extend `Lucene.Net.Search.Query` and compose naturally with `BooleanQuery`.
 
 ### Filtered search
 
@@ -77,6 +80,23 @@ var boolQuery = new BooleanQuery
 };
 var topDocs = searcher.Search(boolQuery, 10);
 ```
+
+### Vector re-scoring
+
+`VectorScoreQuery` re-ranks results from any Lucene query by cosine similarity. The sub-query controls which documents match; the vector score controls ranking:
+
+```csharp
+// Re-rank full-text search results by vector similarity
+var query = new VectorScoreQuery(
+    new TermQuery(new Term("category", "animals")),  // filter: which docs match
+    "embedding",                                      // vector field name
+    queryVector);                                     // query vector
+
+var topDocs = searcher.Search(query, 10);
+// Results are filtered to "animals" category, ranked by cosine similarity
+```
+
+This is useful when you want Lucene's standard query engine to handle filtering (full-text, term, range, boolean) and just need vector similarity for ranking — no top-K limit, no HNSW index.
 
 ### After updates
 
