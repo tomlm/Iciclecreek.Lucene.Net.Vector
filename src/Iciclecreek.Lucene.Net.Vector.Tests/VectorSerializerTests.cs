@@ -36,6 +36,17 @@ public class VectorSerializerTests
     }
 
     [Test]
+    public void RoundTrip_SlicedReadOnlyMemory_ToBytesRef()
+    {
+        var source = new float[] { -1.0f, 1.0f, 2.0f, 3.0f, -2.0f };
+        ReadOnlyMemory<float> memory = source.AsMemory(1, 3);
+        var bytesRef = VectorSerializer.ToBytesRef(memory);
+        var result = VectorSerializer.FromBytesRefAsMemory(bytesRef);
+
+        Assert.That(result.ToArray(), Is.EqualTo(new float[] { 1.0f, 2.0f, 3.0f }));
+    }
+
+    [Test]
     public void EmptyVector_RoundTrips()
     {
         var original = Array.Empty<float>();

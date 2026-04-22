@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using global::Lucene.Net.Util;
 
 namespace Iciclecreek.Lucene.Net.Vector;
@@ -10,14 +11,20 @@ public static class VectorSerializer
 {
     public static byte[] ToBytes(float[] vector)
     {
-        var bytes = new byte[vector.Length * sizeof(float)];
+        if (vector.Length == 0)
+            return Array.Empty<byte>();
+
+        var bytes = AllocateByteArray(vector.Length * sizeof(float));
         Buffer.BlockCopy(vector, 0, bytes, 0, bytes.Length);
         return bytes;
     }
 
     public static float[] FromBytes(byte[] bytes)
     {
-        var vector = new float[bytes.Length / sizeof(float)];
+        if (bytes.Length == 0)
+            return Array.Empty<float>();
+
+        var vector = AllocateFloatArray(bytes.Length / sizeof(float));
         Buffer.BlockCopy(bytes, 0, vector, 0, bytes.Length);
         return vector;
     }
@@ -30,30 +37,45 @@ public static class VectorSerializer
     public static float[] FromBytesRef(BytesRef bytesRef)
     {
         var length = bytesRef.Length / sizeof(float);
-        var vector = new float[length];
+        if (length == 0)
+            return Array.Empty<float>();
+
+        var vector = AllocateFloatArray(length);
         Buffer.BlockCopy(bytesRef.Bytes, bytesRef.Offset, vector, 0, bytesRef.Length);
         return vector;
     }
 
     public static BytesRef ToBytesRef(ReadOnlyMemory<float> vector)
     {
-        var length = vector.Length;
-        var bytes = new byte[length * sizeof(float)];
-#if NETSTANDARD2_0
-        var array = vector.ToArray();
-        Buffer.BlockCopy(array, 0, bytes, 0, bytes.Length);
-#else
-        var span = vector.Span;
-        for (int i = 0; i < span.Length; i++)
-        {
-            BitConverter.TryWriteBytes(bytes.AsSpan(i * sizeof(float)), span[i]);
-        }
-#endif
+        var sourceBytes = MemoryMarshal.AsBytes(vector.Span);
+        if (sourceBytes.Length == 0)
+            return new BytesRef(Array.Empty<byte>());
+
+        var bytes = AllocateByteArray(sourceBytes.Length);
+        sourceBytes.CopyTo(bytes);
         return new BytesRef(bytes);
     }
 
     public static ReadOnlyMemory<float> FromBytesRefAsMemory(BytesRef bytesRef)
     {
         return FromBytesRef(bytesRef).AsMemory();
+    }
+
+    private static byte[] AllocateByteArray(int length)
+    {
+#if NETSTANDARD2_0
+        return new byte[length];
+#else
+        return GC.AllocateUninitializedArray<byte>(length);
+#endif
+    }
+
+    private static float[] AllocateFloatArray(int length)
+    {
+#if NETSTANDARD2_0
+        return new float[length];
+#else
+        return GC.AllocateUninitializedArray<float>(length);
+#endif
     }
 }
