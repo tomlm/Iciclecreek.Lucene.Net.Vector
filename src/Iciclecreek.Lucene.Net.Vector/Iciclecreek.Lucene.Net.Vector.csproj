@@ -12,6 +12,7 @@
     <Description>Adds support for vector embeddings to Lucene.Net 4.8, supporting similarity search and RAG patterns.</Description>
     <Company>Iciclecreek</Company>
     <Authors>Tom Laird-McConnell</Authors>
+    <PackageTags>Lucene.Net;Vector Search;Similarity Search;RAG;Retrieval-Augmented Generation;AI;Machine Learning</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/tomlm/Iciclecreek.Lucene.Net.Vector</PackageProjectUrl>
     <PackageIconUrl>https://raw.githubusercontent.com/tomlm/Iciclecreek.Lucene.Net.Vector/master/icon.png</PackageIconUrl>
