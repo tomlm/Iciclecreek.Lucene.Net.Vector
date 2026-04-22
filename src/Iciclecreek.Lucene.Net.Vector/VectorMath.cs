@@ -17,12 +17,15 @@ public static class VectorMath
     /// <param name="a">First vector.</param>
     /// <param name="b">Second vector (must be same length as <paramref name="a"/>).</param>
     /// <param name="aNorm">Pre-computed L2 norm of <paramref name="a"/> (use <see cref="Norm"/> to compute).</param>
-    public static float CosineSimilarity(float[] a, float[] b, float aNorm)
+    public static float CosineSimilarity(ReadOnlySpan<float> a, ReadOnlySpan<float> b, float aNorm)
     {
         if (a.Length != b.Length) return 0f;
 
         float dot, bNormSq;
 
+#if NETSTANDARD2_0
+        DotAndNormScalar(a, b, out dot, out bNormSq);
+#else
         if (System.Numerics.Vector.IsHardwareAccelerated && a.Length >= Vector<float>.Count)
         {
             DotAndNormSimd(a, b, out dot, out bNormSq);
@@ -31,6 +34,7 @@ public static class VectorMath
         {
             DotAndNormScalar(a, b, out dot, out bNormSq);
         }
+#endif
 
         var bNorm = (float)Math.Sqrt(bNormSq);
         if (aNorm == 0f || bNorm == 0f) return 0f;
@@ -40,10 +44,15 @@ public static class VectorMath
     /// <summary>
     /// Computes the L2 (Euclidean) norm of a vector.
     /// </summary>
-    public static float Norm(float[] v)
+    public static float Norm(ReadOnlySpan<float> v)
     {
         float sum;
 
+#if NETSTANDARD2_0
+        sum = 0f;
+        for (int i = 0; i < v.Length; i++)
+            sum += v[i] * v[i];
+#else
         if (System.Numerics.Vector.IsHardwareAccelerated && v.Length >= Vector<float>.Count)
         {
             var vSum = Vector<float>.Zero;
@@ -52,7 +61,7 @@ public static class VectorMath
 
             for (; i <= v.Length - simdLength; i += simdLength)
             {
-                var vv = new Vector<float>(v, i);
+                var vv = new Vector<float>(v.Slice(i));
                 vSum += vv * vv;
             }
 
@@ -69,11 +78,13 @@ public static class VectorMath
             for (int i = 0; i < v.Length; i++)
                 sum += v[i] * v[i];
         }
+#endif
 
         return (float)Math.Sqrt(sum);
     }
 
-    private static void DotAndNormSimd(float[] a, float[] b, out float dot, out float bNormSq)
+#if !NETSTANDARD2_0
+    private static void DotAndNormSimd(ReadOnlySpan<float> a, ReadOnlySpan<float> b, out float dot, out float bNormSq)
     {
         var vDot = Vector<float>.Zero;
         var vBNorm = Vector<float>.Zero;
@@ -82,8 +93,8 @@ public static class VectorMath
 
         for (; i <= a.Length - simdLength; i += simdLength)
         {
-            var va = new Vector<float>(a, i);
-            var vb = new Vector<float>(b, i);
+            var va = new Vector<float>(a.Slice(i));
+            var vb = new Vector<float>(b.Slice(i));
             vDot += va * vb;
             vBNorm += vb * vb;
         }
@@ -102,8 +113,9 @@ public static class VectorMath
             bNormSq += b[i] * b[i];
         }
     }
+#endif
 
-    private static void DotAndNormScalar(float[] a, float[] b, out float dot, out float bNormSq)
+    private static void DotAndNormScalar(ReadOnlySpan<float> a, ReadOnlySpan<float> b, out float dot, out float bNormSq)
     {
         dot = 0f;
         bNormSq = 0f;

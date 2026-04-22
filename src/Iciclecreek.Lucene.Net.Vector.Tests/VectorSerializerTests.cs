@@ -21,27 +21,27 @@ public class VectorSerializerTests
         var bytesRef = VectorSerializer.ToBytesRef(original);
         var result = VectorSerializer.FromBytesRef(bytesRef);
 
-        Assert.That(result, Is.EqualTo(original));
+        Assert.That(result.ToArray(), Is.EqualTo(original));
     }
 
     [Test]
-    public void RoundTrip_ReadOnlyMemory_ToBytesRef()
+    public void RoundTrip_ReadOnlySpan_ToBytesRef()
     {
         var original = new float[] { 1.0f, 2.0f, 3.0f };
-        ReadOnlyMemory<float> memory = original.AsMemory();
-        var bytesRef = VectorSerializer.ToBytesRef(memory);
-        var result = VectorSerializer.FromBytesRefAsMemory(bytesRef);
+        ReadOnlySpan<float> span = original.AsSpan();
+        var bytesRef = VectorSerializer.ToBytesRef(span);
+        var result = VectorSerializer.FromBytesRef(bytesRef);
 
         Assert.That(result.ToArray(), Is.EqualTo(original));
     }
 
     [Test]
-    public void RoundTrip_SlicedReadOnlyMemory_ToBytesRef()
+    public void RoundTrip_SlicedReadOnlySpan_ToBytesRef()
     {
         var source = new float[] { -1.0f, 1.0f, 2.0f, 3.0f, -2.0f };
-        ReadOnlyMemory<float> memory = source.AsMemory(1, 3);
-        var bytesRef = VectorSerializer.ToBytesRef(memory);
-        var result = VectorSerializer.FromBytesRefAsMemory(bytesRef);
+        ReadOnlySpan<float> span = source.AsSpan(1, 3);
+        var bytesRef = VectorSerializer.ToBytesRef(span);
+        var result = VectorSerializer.FromBytesRef(bytesRef);
 
         Assert.That(result.ToArray(), Is.EqualTo(new float[] { 1.0f, 2.0f, 3.0f }));
     }
@@ -63,7 +63,7 @@ public class VectorSerializerTests
         var bytesRef = VectorSerializer.ToBytesRef(original);
         var result = VectorSerializer.FromBytesRef(bytesRef);
 
-        Assert.That(result, Is.EqualTo(original));
+        Assert.That(result.ToArray(), Is.EqualTo(original));
     }
 
     [Test]
@@ -74,7 +74,7 @@ public class VectorSerializerTests
         var bytesRef = VectorSerializer.ToBytesRef(original);
         var result = VectorSerializer.FromBytesRef(bytesRef);
 
-        Assert.That(result, Is.EqualTo(original));
+        Assert.That(result.ToArray(), Is.EqualTo(original));
     }
 
     [Test]
@@ -89,6 +89,6 @@ public class VectorSerializerTests
         var bytesRef = new global::Lucene.Net.Util.BytesRef(paddedBytes, 4, bytes.Length);
 
         var result = VectorSerializer.FromBytesRef(bytesRef);
-        Assert.That(result, Is.EqualTo(original));
+        Assert.That(result.ToArray(), Is.EqualTo(original));
     }
 }

@@ -1,7 +1,6 @@
 #if NET10_0_OR_GREATER
 using HNSW.Net;
 using global::Lucene.Net.Index;
-using global::Lucene.Net.Search;
 using global::Lucene.Net.Util;
 
 namespace Iciclecreek.Lucene.Net.Vector;
@@ -62,7 +61,7 @@ internal class LuceneVectorIndex : IDisposable
                 if (bytesRef.Length == 0)
                     continue;
 
-                var vector = VectorSerializer.FromBytesRef(bytesRef);
+                var vector = VectorSerializer.FromBytesRef(bytesRef).ToArray();
 
                 if (_vectors.Count > 0 && vector.Length != _vectors[0].Length)
                     throw new InvalidOperationException(

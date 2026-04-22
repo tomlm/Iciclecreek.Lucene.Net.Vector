@@ -34,31 +34,23 @@ public static class VectorSerializer
         return new BytesRef(ToBytes(vector));
     }
 
-    public static float[] FromBytesRef(BytesRef bytesRef)
+    public static ReadOnlySpan<float> FromBytesRef(BytesRef bytesRef)
     {
-        var length = bytesRef.Length / sizeof(float);
-        if (length == 0)
-            return Array.Empty<float>();
+        if (bytesRef.Length == 0)
+            return ReadOnlySpan<float>.Empty;
 
-        var vector = AllocateFloatArray(length);
-        Buffer.BlockCopy(bytesRef.Bytes, bytesRef.Offset, vector, 0, bytesRef.Length);
-        return vector;
+        return MemoryMarshal.Cast<byte, float>(bytesRef.Bytes.AsSpan(bytesRef.Offset, bytesRef.Length));
     }
 
-    public static BytesRef ToBytesRef(ReadOnlyMemory<float> vector)
+    public static BytesRef ToBytesRef(ReadOnlySpan<float> vector)
     {
-        var sourceBytes = MemoryMarshal.AsBytes(vector.Span);
+        var sourceBytes = MemoryMarshal.AsBytes(vector);
         if (sourceBytes.Length == 0)
             return new BytesRef(Array.Empty<byte>());
 
         var bytes = AllocateByteArray(sourceBytes.Length);
         sourceBytes.CopyTo(bytes);
         return new BytesRef(bytes);
-    }
-
-    public static ReadOnlyMemory<float> FromBytesRefAsMemory(BytesRef bytesRef)
-    {
-        return FromBytesRef(bytesRef).AsMemory();
     }
 
     private static byte[] AllocateByteArray(int length)

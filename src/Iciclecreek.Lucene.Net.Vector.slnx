@@ -1,4 +1,5 @@
 <Solution>
+  <Project Path="BenchmarkSuite1/Iciclecreek.Lucene.Net.Vector.Benchmarks.csproj" />
   <Project Path="Iciclecreek.Lucene.Net.Vector.Tests/Iciclecreek.Lucene.Net.Vector.Tests.csproj" />
   <Project Path="Iciclecreek.Lucene.Net.Vector/Iciclecreek.Lucene.Net.Vector.csproj" />
 </Solution>
