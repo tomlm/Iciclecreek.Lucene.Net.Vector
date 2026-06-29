@@ -7,8 +7,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <PropertyGroup>
-    <Version>2.0.2</Version>
-    <AssemblyVersion>2.0.2.0</AssemblyVersion>
+    <Version>2.0.3</Version>
+    <AssemblyVersion>2.0.3.0</AssemblyVersion>
     <Description>Adds support for vector embeddings to Lucene.Net 4.8, supporting similarity search and RAG patterns.</Description>
     <Company>Iciclecreek</Company>
     <Authors>Tom Laird-McConnell</Authors>
@@ -36,9 +36,9 @@
   <ItemGroup>
     <PackageReference Include="Lucene.Net" Version="4.8.0-beta00017" />
     <PackageReference Include="Lucene.Net.Queries" Version="4.8.0-beta00017" />
-    <PackageReference Include="System.Numerics.Vectors" Version="4.5.0"
-                      Condition="'$(TargetFramework)' == 'netstandard2.0'" />
-    <PackageReference Include="HNSW" Version="26.4.177"
-                      Condition="'$(TargetFramework)' == 'net10.0'"/>
+    <PackageReference Include="System.Numerics.Vectors" Version="4.6.1" Condition="'$(TargetFramework)' == 'netstandard2.0'" />
+    <PackageReference Include="HNSW" Version="26.6.1848" Condition="'$(TargetFramework)' == 'net10.0'" />
+    <!-- Force patched MessagePack to resolve CVE-2026-48502; HNSW otherwise pulls the vulnerable 3.1.0 (fixed in 3.1.7). -->
+    <PackageReference Include="MessagePack" Version="3.1.7" Condition="'$(TargetFramework)' == 'net10.0'" />
   </ItemGroup>
 </Project>
