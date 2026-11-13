@@ -8,7 +8,7 @@ namespace Iciclecreek.Lucene.Net.Vector;
 /// <summary>
 /// A Lucene Query that performs approximate nearest neighbor search over vectors
 /// stored as BinaryDocValuesField. The HNSW index is built and cached automatically
-/// per (index segment, fieldName) — no manual index management required. Segments
+/// per (index segment, fieldName, options) — no manual index management required. Segments
 /// do not change once written, so a reader opened after a commit reuses the graphs
 /// of the segments it shares with the reader before it and builds only the new ones.
 /// Graphs are built in the background; until a segment's graph is ready its vectors

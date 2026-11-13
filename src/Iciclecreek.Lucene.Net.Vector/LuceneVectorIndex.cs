@@ -11,7 +11,7 @@ namespace Iciclecreek.Lucene.Net.Vector;
 /// neighbor search. A segment with at least
 /// <see cref="VectorIndexOptions.MinimumGraphSize"/> vectors gets an HNSW graph;
 /// a smaller one is compared one by one.
-/// Built and cached automatically per (segment, fieldName) via VectorIndexCache.
+/// Built and cached automatically per (segment, fieldName, options) via VectorIndexCache.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -332,7 +332,7 @@ internal class LuceneVectorIndex : IDisposable
     /// as those threads live: the nodes, the item list with every vector of the
     /// segment, and the pool itself. Emptying the pool breaks that.
     /// <para>
-    /// HNSW (26.9.5494) has no public way to do it, so this reaches the private
+    /// HNSW (as of 26.11.7916) has no public way to do it, so this reaches the private
     /// members <c>SmallWorld.Graph</c>, <c>Graph.GraphCore</c> and
     /// <c>Core.SearcherPool</c>. If a later version of the package renames them
     /// this does nothing and the graph leaks again;
