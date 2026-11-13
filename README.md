@@ -103,16 +103,20 @@ This is useful when you want Lucene's standard query engine to handle filtering 
 
 ### After updates
 
-When you add, update, or delete documents, open a new reader -- the HNSW index rebuilds automatically:
+When you add, update, or delete documents, reopen the reader with `DirectoryReader.OpenIfChanged`. The vector index is kept per index segment, and segments do not change once written, so only the segments the commit added are indexed:
 
 ```csharp
 writer.DeleteDocuments(new Term("id", "old-doc"));
 writer.Commit();
 
-using var newReader = DirectoryReader.Open(directory);
+var newReader = DirectoryReader.OpenIfChanged(reader) ?? reader;
 var searcher = new IndexSearcher(newReader);
 var query = new VectorQuery("embedding", queryVector, k: 10, newReader);
 ```
+
+A reader from `DirectoryReader.Open(directory)` shares nothing with the readers before it, so every segment is loaded and indexed again. Use `OpenIfChanged` (or a near-real-time reader from the `IndexWriter`) to keep what is already built.
+
+A query never waits for an HNSW graph. Graphs are built in the background, and until a segment's graph is ready its vectors are compared one by one, which gives the exact nearest neighbors. To have the graphs ready before the first query, call `KnnVectorQuery.Warmup(reader, "embedding")`.
 
 ### HNSW options (.NET 10+)
 
@@ -125,6 +129,7 @@ var options = new VectorIndexOptions
     ConstructionPruning = 200,                     // Build quality (default: 200)
     EfSearch = 50,                                 // Search quality (default: 50)
     Distance = VectorDistanceFunction.Cosine,      // Distance function (default: Cosine)
+    MinimumGraphSize = 1000,                       // Smaller segments are compared one by one (default: 1000)
 };
 var query = new VectorQuery("embedding", queryVector, k: 10, reader, options);
 ```
@@ -204,8 +209,11 @@ var filteredRag = new BooleanQuery
 ## Notes
 
 - **Vectors are stored in Lucene** as `BinaryDocValuesField` (4 bytes per float, little-endian). The HNSW graph is an in-memory acceleration structure built automatically from DocValues.
-- **HNSW caching** — the graph is cached per `(IndexReader, fieldName)`. Since an `IndexReader` is an immutable snapshot, the cached graph is valid for the reader's entire lifetime. Opening a new reader after commits triggers a fresh build.
-- **Deleted documents** are automatically excluded — Lucene's `LiveDocs` filtering ensures deleted docs are not loaded into the HNSW graph or evaluated by brute-force search.
+- **HNSW caching** — vectors and their graph are cached per `(index segment, fieldName)` and shared by every reader that includes the segment. A commit adds a small segment, which is cheap to index; the existing segments keep their graphs. When Lucene merges segments, the merged segment is new and gets its own graph, built in the background while queries on it compare one by one.
+- **Small segments** (fewer than `MinimumGraphSize` vectors, 1,000 by default) get no graph and are always compared one by one.
+- **Deleted documents** are automatically excluded — a segment's index holds all of its documents, and each search skips the ones deleted in its reader.
+- **Vectors changed in place** with `IndexWriter.UpdateBinaryDocValue` are not picked up, because that does not create a new segment. Replace the document instead.
+- **Memory** — the vectors of every searched segment are held in memory (4 bytes per float), with or without a graph.
 - **Distance functions**: `Cosine` (general purpose, handles unnormalized vectors) and `CosineForUnits` (faster, requires pre-normalized unit vectors). These apply to HNSW only; `CosineVectorQuery` always uses cosine similarity.
 
 ## License

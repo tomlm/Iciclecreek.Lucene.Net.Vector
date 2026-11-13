@@ -5,31 +5,50 @@ using global::Lucene.Net.Index;
 namespace Iciclecreek.Lucene.Net.Vector;
 
 /// <summary>
-/// Caches HNSW vector indexes per (IndexReader, fieldName) pair.
-/// Since IndexReader is an immutable snapshot, the cached graph
-/// is valid for the reader's entire lifetime.
+/// Caches vector indexes per (segment, fieldName) pair.
+/// A segment never changes once written, so its index stays valid across
+/// every reader that includes the segment: after a commit, only the segments
+/// that are new have an index built.
 /// </summary>
+/// <remarks>
+/// The key is the segment's <see cref="IndexReader.CoreCacheKey"/>, which a
+/// reopened reader shares with the reader it came from for every segment
+/// they have in common. Deleting documents does not change it; the deleted
+/// documents are passed to each search instead. Neither does updating a
+/// doc value in place (<c>IndexWriter.UpdateBinaryDocValue</c>), so a vector
+/// changed that way is not seen: replace the document instead.
+/// </remarks>
 internal static class VectorIndexCache
 {
-    // ConditionalWeakTable keys on IndexReader identity — when the reader is GC'd,
-    // the cache entry (and its HNSW graph) is automatically cleaned up.
-    private static readonly ConditionalWeakTable<IndexReader, Dictionary<string, LuceneVectorIndex>> _cache = new();
+    // ConditionalWeakTable keys on the identity of the segment's core key — when
+    // the key is GC'd, the cache entry (and its HNSW graph) is automatically cleaned up.
+    private static readonly ConditionalWeakTable<object, Dictionary<string, LuceneVectorIndex>> _cache = new();
     private static readonly object _lock = new();
-    private static readonly IReaderDisposedListener _readerDisposedListener = new ReaderDisposedListener();
+    private static readonly SegmentDisposedListener _disposedListener = new();
 
     /// <summary>
-    /// Get or build the HNSW index for the given reader and field.
-    /// Thread-safe: concurrent callers for the same (reader, field) will block
+    /// Get or build the vector index for the given segment and field.
+    /// Thread-safe: concurrent callers for the same (segment, field) will block
     /// until the first caller finishes building.
     /// </summary>
-    internal static LuceneVectorIndex GetOrBuild(IndexReader reader, string fieldName, VectorIndexOptions? options = null)
+    internal static LuceneVectorIndex GetOrBuild(AtomicReader segment, string fieldName, VectorIndexOptions? options = null)
     {
-        Dictionary<string, LuceneVectorIndex> fieldMap;
+        var key = segment.CoreCacheKey;
+        Dictionary<string, LuceneVectorIndex>? fieldMap;
 
         lock (_lock)
         {
-            fieldMap = _cache.GetOrCreateValue(reader);
-            reader.AddReaderDisposedListener(_readerDisposedListener);
+            if (!_cache.TryGetValue(key, out fieldMap))
+            {
+                fieldMap = new Dictionary<string, LuceneVectorIndex>();
+                _cache.Add(key, fieldMap);
+
+                // The core of a segment outlives any one reader of it.
+                if (segment is SegmentReader segmentReader)
+                    segmentReader.AddCoreDisposedListener(_disposedListener);
+                else
+                    segment.AddReaderDisposedListener(_disposedListener);
+            }
         }
 
         lock (fieldMap)
@@ -38,35 +57,41 @@ internal static class VectorIndexCache
                 return existing;
 
             var index = new LuceneVectorIndex(fieldName, options);
-            index.BuildIndex(reader);
+            index.BuildIndex(segment);
             fieldMap[fieldName] = index;
             return index;
         }
     }
 
-    private sealed class ReaderDisposedListener : IReaderDisposedListener
+    private static void Remove(object key)
     {
-        public void OnDispose(IndexReader reader)
+        Dictionary<string, LuceneVectorIndex>? fieldMap;
+
+        lock (_lock)
         {
-            if (!_cache.TryGetValue(reader, out var fieldMap))
+            if (!_cache.TryGetValue(key, out fieldMap))
                 return;
 
-            List<LuceneVectorIndex> indexesToDispose;
-
-            lock (fieldMap)
-            {
-                indexesToDispose = new List<LuceneVectorIndex>(fieldMap.Count);
-                foreach (var index in fieldMap.Values)
-                    indexesToDispose.Add(index);
-
-                fieldMap.Clear();
-            }
-
-            _cache.Remove(reader);
-
-            foreach (var index in indexesToDispose)
-                index.Dispose();
+            _cache.Remove(key);
         }
+
+        List<LuceneVectorIndex> indexesToDispose;
+
+        lock (fieldMap)
+        {
+            indexesToDispose = new List<LuceneVectorIndex>(fieldMap.Values);
+            fieldMap.Clear();
+        }
+
+        foreach (var index in indexesToDispose)
+            index.Dispose();
+    }
+
+    private sealed class SegmentDisposedListener : SegmentReader.ICoreDisposedListener, IReaderDisposedListener
+    {
+        public void OnDispose(object ownerCoreCacheKey) => Remove(ownerCoreCacheKey);
+
+        public void OnDispose(IndexReader reader) => Remove(reader.CoreCacheKey);
     }
 }
 #endif

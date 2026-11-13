@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Iciclecreek.Lucene.Net.Vector adds vector similarity search to Lucene.Net 4.8. Vectors are stored as `BinaryDocValuesField` and searched via `KnnVectorQuery` — a native Lucene `Query` subclass that composes with `BooleanQuery`. The HNSW index is built and cached automatically per `IndexReader`.
+Iciclecreek.Lucene.Net.Vector adds vector similarity search to Lucene.Net 4.8. Vectors are stored as `BinaryDocValuesField` and searched via `KnnVectorQuery` — a native Lucene `Query` subclass that composes with `BooleanQuery`. The HNSW index is built and cached automatically per index segment.
 
 This is the **core library only**. A separate VectorData connector library (Microsoft.Extensions.VectorData) wraps this one.
 
@@ -24,15 +24,15 @@ dotnet test src/Iciclecreek.Lucene.Net.Vector.Tests --filter "FullyQualifiedName
 
 ### Public API
 
-- **KnnVectorQuery** — `Lucene.Net.Search.Query` subclass. Takes `(field, queryVector, k, reader, options?)`. HNSW index built/cached automatically per `(IndexReader, field)` via internal `VectorIndexCache`.
+- **KnnVectorQuery** — `Lucene.Net.Search.Query` subclass. Takes `(field, queryVector, k, reader, options?)`. HNSW index built/cached automatically per `(segment, field)` via internal `VectorIndexCache`; results of all segments are merged to the top K.
 - **VectorSerializer** — `float[] ↔ byte[] ↔ BytesRef` conversion for `BinaryDocValuesField` storage.
-- **VectorIndexOptions** — HNSW tuning (M, ConstructionPruning, EfSearch, Distance).
+- **VectorIndexOptions** — HNSW tuning (M, ConstructionPruning, EfSearch, Distance, MinimumGraphSize).
 - **SearchResult** — `(DocId, Distance, Score)` record struct.
 
 ### Internal
 
-- **LuceneVectorIndex** — HNSW graph management over Lucene DocValues. Internal class, not part of the public API.
-- **VectorIndexCache** — `ConditionalWeakTable`-based cache keyed on `IndexReader` identity. Entries auto-cleanup when reader is GC'd.
+- **LuceneVectorIndex** — the vectors of one segment, loaded from DocValues, with segment-local doc ids. Holds deleted documents too; each search passes the reader's `LiveDocs`. Segments with at least `MinimumGraphSize` vectors get an HNSW graph, built on a background queue (one at a time); until it is ready, and for smaller segments, search compares one by one. Internal class, not part of the public API.
+- **VectorIndexCache** — `ConditionalWeakTable`-based cache keyed on the segment's `CoreCacheKey`, so readers reopened with `OpenIfChanged` share entries. Entries are removed when the segment core is disposed, or GC'd.
 
 ### Namespace Conflict
 
