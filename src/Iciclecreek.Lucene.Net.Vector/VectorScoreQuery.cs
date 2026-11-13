@@ -43,6 +43,13 @@ public class VectorScoreQuery : CustomScoreQuery
         private readonly float[] _queryVector;
         private readonly float _queryNorm;
 
+        // One provider scores one segment, on one thread. The vector column and
+        // the buffer are fetched once and reused for every document, instead of
+        // being looked up and allocated per document.
+        private readonly global::Lucene.Net.Util.BytesRef _bytes = new global::Lucene.Net.Util.BytesRef();
+        private BinaryDocValues? _vectors;
+        private bool _vectorsLoaded;
+
         public VectorScoreProvider(AtomicReaderContext context, string vectorFieldName, float[] queryVector)
             : base(context)
         {
@@ -54,17 +61,22 @@ public class VectorScoreQuery : CustomScoreQuery
 
         public override float CustomScore(int doc, float subQueryScore, float valSrcScore)
         {
-            var storedBytes = _context.AtomicReader.GetBinaryDocValues(_vectorFieldName);
-            if (storedBytes == null)
+            if (!_vectorsLoaded)
+            {
+                // Loaded on first use so it happens on the thread that scores.
+                _vectors = _context.AtomicReader.GetBinaryDocValues(_vectorFieldName);
+                _vectorsLoaded = true;
+            }
+
+            if (_vectors == null)
                 return 0f;
 
-            var bytesRef = new global::Lucene.Net.Util.BytesRef();
-            storedBytes.Get(doc, bytesRef);
+            _vectors.Get(doc, _bytes);
 
-            if (bytesRef.Length == 0)
+            if (_bytes.Length == 0)
                 return 0f;
 
-            var docVector = VectorSerializer.FromBytesRef(bytesRef);
+            var docVector = VectorSerializer.FromBytesRef(_bytes);
             var similarity = VectorMath.CosineSimilarity(_queryVector, docVector, _queryNorm);
             return (similarity + 1f) / 2f;
         }

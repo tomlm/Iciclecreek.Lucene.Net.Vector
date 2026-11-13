@@ -144,12 +144,12 @@ public class CosineVectorQuery : Query
                     continue;
 
                 var liveDocs = atomicReader.LiveDocs;
+                var bytesRef = new BytesRef();
                 for (int docId = 0; docId < atomicReader.MaxDoc; docId++)
                 {
                     if (liveDocs != null && !liveDocs.Get(docId))
                         continue;
 
-                    var bytesRef = new BytesRef();
                     docValues.Get(docId, bytesRef);
 
                     if (bytesRef.Length == 0)
