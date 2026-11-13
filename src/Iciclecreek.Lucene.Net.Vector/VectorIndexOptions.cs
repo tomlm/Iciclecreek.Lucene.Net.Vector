@@ -32,6 +32,13 @@ public class VectorIndexOptions
     /// Whether to enable thread-safe operations on the HNSW graph. Default: true.
     /// </summary>
     public bool ThreadSafe { get; set; } = true;
+
+    /// <summary>
+    /// The fewest vectors an index segment must hold to get an HNSW graph.
+    /// A smaller segment is compared one by one, which is exact and, at this
+    /// size, as fast as building and walking a graph. Default: 1000.
+    /// </summary>
+    public int MinimumGraphSize { get; set; } = 1000;
 }
 
 public enum VectorDistanceFunction

@@ -8,7 +8,11 @@ namespace Iciclecreek.Lucene.Net.Vector;
 /// <summary>
 /// A Lucene Query that performs approximate nearest neighbor search over vectors
 /// stored as BinaryDocValuesField. The HNSW index is built and cached automatically
-/// per (IndexReader, fieldName) — no manual index management required.
+/// per (index segment, fieldName, options) — no manual index management required. Segments
+/// do not change once written, so a reader opened after a commit reuses the graphs
+/// of the segments it shares with the reader before it and builds only the new ones.
+/// Graphs are built in the background; until a segment's graph is ready its vectors
+/// are compared one by one, so a query never waits for a build.
 ///
 /// Composes naturally with BooleanQuery for filtered or hybrid search.
 /// </summary>
@@ -34,12 +38,42 @@ public class KnnVectorQuery : Query
     public int K => _k;
 
     /// <summary>
-    /// Pre-build the HNSW index for the given reader and field so the first query
-    /// doesn't pay the build cost. Safe to call multiple times — subsequent calls are no-ops.
+    /// Load the vectors of every segment of the given reader and field, build the
+    /// HNSW graph of each segment that gets one, and wait until those graphs are
+    /// ready. Without this the graphs are built in the background and queries
+    /// compare vectors one by one in the meantime, which is exact but slower on a
+    /// large index.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A segment with fewer vectors than <see cref="VectorIndexOptions.MinimumGraphSize"/>
+    /// (1,000 by default) gets no graph, here or in a query. On an index made of
+    /// small segments this loads the vectors and builds nothing.
+    /// </para>
+    /// <para>
+    /// Pass the same <paramref name="options"/> as the queries will. An index is
+    /// kept per distinct set of option values, so warming up with other values
+    /// builds graphs those queries do not use.
+    /// </para>
+    /// <para>
+    /// Safe to call more than once: a segment whose graph is ready costs nothing.
+    /// A call still waits for a graph that is queued or being built, which can be
+    /// behind the graphs of other indexes in the process, since they are built
+    /// one at a time. If a graph failed to build, every call rethrows the failure
+    /// and queries on that segment go on comparing one by one.
+    /// </para>
+    /// </remarks>
     public static void Warmup(IndexReader reader, string field, VectorIndexOptions? options = null)
     {
-        VectorIndexCache.GetOrBuild(reader, field, options);
+        ArgumentNullException.ThrowIfNull(reader);
+
+        // Start every segment, then wait for each.
+        var indexes = new List<LuceneVectorIndex>();
+        foreach (var leaf in reader.Leaves)
+            indexes.Add(VectorIndexCache.GetOrBuild(leaf.AtomicReader, field, options));
+
+        foreach (var index in indexes)
+            index.WaitForGraph();
     }
 
     public override Weight CreateWeight(IndexSearcher searcher)
@@ -140,19 +174,29 @@ public class KnnVectorQuery : Query
             if (_scores != null)
                 return;
 
-            var vectorIndex = VectorIndexCache.GetOrBuild(
-                _query._reader, _query._field, _query._options);
-
-            var results = vectorIndex.Search(
-                _query._queryVector,
-                _query._k);
-
-            _scores = new Dictionary<int, float>(results.Count);
-            float boost = _query.Boost;
-            foreach (var result in results)
+            // The nearest K of each segment, then the nearest K of those.
+            var nearest = new List<SearchResult>();
+            foreach (var leaf in _query._reader.Leaves)
             {
-                _scores[result.DocId] = result.Score * boost;
+                var segment = leaf.AtomicReader;
+                var vectorIndex = VectorIndexCache.GetOrBuild(segment, _query._field, _query._options);
+
+                foreach (var result in vectorIndex.Search(_query._queryVector, _query._k, segment.LiveDocs))
+                {
+                    nearest.Add(new SearchResult(leaf.DocBase + result.DocId, result.Distance));
+                }
             }
+
+            nearest.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+
+            var scores = new Dictionary<int, float>(Math.Min(nearest.Count, Math.Max(_query._k, 0)));
+            float boost = _query.Boost;
+            for (int i = 0; i < nearest.Count && i < _query._k; i++)
+            {
+                scores[nearest[i].DocId] = nearest[i].Score * boost;
+            }
+
+            _scores = scores;
         }
     }
 
