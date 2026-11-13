@@ -109,10 +109,18 @@ When you add, update, or delete documents, reopen the reader with `DirectoryRead
 writer.DeleteDocuments(new Term("id", "old-doc"));
 writer.Commit();
 
-var newReader = DirectoryReader.OpenIfChanged(reader) ?? reader;
-var searcher = new IndexSearcher(newReader);
-var query = new VectorQuery("embedding", queryVector, k: 10, newReader);
+var newReader = DirectoryReader.OpenIfChanged(reader);
+if (newReader != null)
+{
+    reader.Dispose();
+    reader = newReader;
+}
+
+var searcher = new IndexSearcher(reader);
+var query = new VectorQuery("embedding", queryVector, k: 10, reader);
 ```
+
+Dispose the reader you replace. The vectors and graph of a segment are released when the last reader of that segment is disposed, so an old reader left open keeps the segments that have since been merged away in memory, and their files open.
 
 A reader from `DirectoryReader.Open(directory)` shares nothing with the readers before it, so every segment is loaded and indexed again. Use `OpenIfChanged` (or a near-real-time reader from the `IndexWriter`) to keep what is already built.
 
