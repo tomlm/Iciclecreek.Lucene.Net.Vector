@@ -180,8 +180,10 @@ internal class LuceneVectorIndex : IDisposable
         if (graph == null)
             return SearchExact(queryVector, topK, liveDocs);
 
-        Func<float[], bool> itemFilter = liveDocs == null
-            ? _ => true
+        // No filter when nothing is deleted: HNSW gives any filter a dictionary
+        // of its answers for each search.
+        Func<float[], bool>? itemFilter = liveDocs == null
+            ? null
             : vector => liveDocs.Get(_vectorToDocId[vector]);
 
         IList<SmallWorld<float[], float>.KNNSearchResult> found;
