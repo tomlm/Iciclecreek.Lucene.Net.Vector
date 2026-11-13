@@ -1,4 +1,5 @@
 #if NET10_0_OR_GREATER
+using System.Runtime.CompilerServices;
 using Lucene.Net.Analysis.Standard;
 using Lucene.Net.Documents;
 using Lucene.Net.Index;
@@ -268,6 +269,45 @@ public class KnnSegmentTests : VectorQueryTestBase
         }
 
         Assert.That(index.IsDisposed, Is.True);
+    }
+
+    [Test]
+    public void ADisposedSegment_LetsItsGraphBeCollected()
+    {
+        var random = new Random(10);
+        AddSegment("a", 300, random);
+
+        var graphItems = SearchThroughTheGraphThenDispose(RandomVector(random));
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        // If this fails after an HNSW upgrade, LuceneVectorIndex.ReleaseGraph no longer
+        // finds the package's private searcher pool, and every graph of a segment that
+        // is merged away or closed stays in memory until the process ends.
+        Assert.That(graphItems.IsAlive, Is.False);
+    }
+
+    /// <summary>
+    /// Its own method, so that nothing here still refers to the graph when the caller collects.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private WeakReference SearchThroughTheGraphThenDispose(float[] queryVector)
+    {
+        using var reader = DirectoryReader.Open(_directory);
+        KnnVectorQuery.Warmup(reader, "embedding", AlwaysGraph);
+
+        var index = VectorIndexCache.GetOrBuild(reader.Leaves[0].AtomicReader, "embedding");
+        var graphItems = index.GraphItems;
+        Assert.That(graphItems, Is.Not.Null);
+
+        // HNSW pools its searchers per thread, so search from two.
+        List<string> Search() => Ids(new IndexSearcher(reader), new KnnVectorQuery("embedding", queryVector, 5, reader, AlwaysGraph), 5);
+        Assert.That(Search(), Has.Count.EqualTo(5));
+        Assert.That(Task.Run(Search).GetAwaiter().GetResult(), Has.Count.EqualTo(5));
+
+        return new WeakReference(graphItems);
     }
 }
 #endif

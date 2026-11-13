@@ -21,7 +21,9 @@ namespace Iciclecreek.Lucene.Net.Vector;
 internal static class VectorIndexCache
 {
     // ConditionalWeakTable keys on the identity of the segment's core key — when
-    // the key is GC'd, the cache entry (and its HNSW graph) is automatically cleaned up.
+    // the key is GC'd, the cache entry is automatically cleaned up. Its HNSW graph is
+    // only let go when the segment is disposed (see LuceneVectorIndex.ReleaseGraph),
+    // so a reader that is dropped without being disposed leaves its graphs behind.
     private static readonly ConditionalWeakTable<object, Dictionary<string, LuceneVectorIndex>> _cache = new();
     private static readonly object _lock = new();
     private static readonly SegmentDisposedListener _disposedListener = new();

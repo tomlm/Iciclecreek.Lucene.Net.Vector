@@ -32,7 +32,7 @@ dotnet test src/Iciclecreek.Lucene.Net.Vector.Tests --filter "FullyQualifiedName
 ### Internal
 
 - **LuceneVectorIndex** — the vectors of one segment, loaded from DocValues, with segment-local doc ids. Holds deleted documents too; each search passes the reader's `LiveDocs`. Segments with at least `MinimumGraphSize` vectors get an HNSW graph, built on a background queue (one at a time); until it is ready, and for smaller segments, search compares one by one. Internal class, not part of the public API.
-- **VectorIndexCache** — `ConditionalWeakTable`-based cache keyed on the segment's `CoreCacheKey`, so readers reopened with `OpenIfChanged` share entries. Entries are removed when the segment core is disposed, or GC'd.
+- **VectorIndexCache** — `ConditionalWeakTable`-based cache keyed on the segment's `CoreCacheKey`, so readers reopened with `OpenIfChanged` share entries. Entries are removed when the segment core is disposed, or GC'd. Disposing is what frees an HNSW graph: `LuceneVectorIndex.ReleaseGraph` empties the package's private searcher pool by reflection, because the pool otherwise keeps the graph reachable for the life of the process (HNSW has no public API for it; `KnnSegmentTests.ADisposedSegment_LetsItsGraphBeCollected` fails if an upgrade breaks this).
 
 ### Namespace Conflict
 
@@ -41,5 +41,5 @@ The project namespace `Iciclecreek.Lucene.Net.Vector` contains `Lucene.Net` as a
 ### Dependencies
 
 - `Lucene.Net` (4.8.0-beta00017) — no `Occur.FILTER` in 4.8, use `Occur.MUST` instead
-- `HNSW` (26.4.177) — `SmallWorld<float[], float>`, `CosineDistance.SIMD`, `DefaultRandomGenerator.Instance` (no public constructor)
+- `HNSW` (26.9.5494) — `SmallWorld<float[], float>`, `CosineDistance.SIMD`, `DefaultRandomGenerator.Instance` (no public constructor)
 - HNSW `KNNSearch` filter is `Func<float[], bool>` (filters by vector item, not by index). Use `ReferenceEqualityComparer` to map vectors back to doc IDs

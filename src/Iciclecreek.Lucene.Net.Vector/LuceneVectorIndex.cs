@@ -1,4 +1,5 @@
 #if NET10_0_OR_GREATER
+using System.Reflection;
 using HNSW.Net;
 using global::Lucene.Net.Index;
 using global::Lucene.Net.Util;
@@ -42,6 +43,9 @@ internal class LuceneVectorIndex : IDisposable
     private readonly List<int> _docIds = new();
     private volatile bool _disposed;
 
+    /// <summary>Held to publish the graph and to dispose, so that neither misses the other.</summary>
+    private readonly object _graphLock = new();
+
     internal LuceneVectorIndex(string vectorFieldName, VectorIndexOptions? options = null)
     {
         _vectorFieldName = vectorFieldName ?? throw new ArgumentNullException(nameof(vectorFieldName));
@@ -56,6 +60,12 @@ internal class LuceneVectorIndex : IDisposable
     internal bool HasGraph => _graph != null;
 
     internal bool IsDisposed => _disposed;
+
+    /// <summary>
+    /// The item list inside the HNSW graph, which lives exactly as long as the
+    /// graph does. For tests that check a graph is collected.
+    /// </summary>
+    internal object? GraphItems => _graph?.UnsafeItems;
 
     /// <summary>
     /// Waits for the HNSW graph, when the segment gets one, and rethrows
@@ -133,7 +143,20 @@ internal class LuceneVectorIndex : IDisposable
             ? _ => true
             : vector => liveDocs.Get(_vectorToDocId[vector]);
 
-        var results = graph.KNNSearch(queryVector, topK, itemFilter, CancellationToken.None)
+        IList<SmallWorld<float[], float>.KNNSearchResult> found;
+        try
+        {
+            found = graph.KNNSearch(queryVector, topK, itemFilter, CancellationToken.None);
+        }
+        finally
+        {
+            // This search handed its searcher back to the graph's pool. If the
+            // segment was disposed meanwhile, the pool has to be emptied again.
+            if (_disposed)
+                ReleaseGraph(graph);
+        }
+
+        var results = found
             .Select(r => new SearchResult(_docIds[r.Id], r.Distance))
             .OrderBy(r => r.Distance)
             .ToList();
@@ -215,8 +238,48 @@ internal class LuceneVectorIndex : IDisposable
         // far larger than the graph: 12 bytes for every pair of vectors, up to 3 GB.
         graph.DisableDistanceCache();
 
-        if (!_disposed)
-            _graph = graph;
+        lock (_graphLock)
+        {
+            if (!_disposed)
+            {
+                _graph = graph;
+                return;
+            }
+        }
+
+        // Disposed while it was being built.
+        ReleaseGraph(graph);
+    }
+
+    private static readonly System.Reflection.FieldInfo? GraphField =
+        typeof(SmallWorld<float[], float>).GetField("Graph", BindingFlags.Instance | BindingFlags.NonPublic);
+
+    /// <summary>
+    /// Lets a graph that is no longer used be collected.
+    /// </summary>
+    /// <remarks>
+    /// HNSW keeps the searchers of a graph in a pool (a <c>ConcurrentBag</c>) for
+    /// reuse. The bag stores them per thread, each searcher refers to the graph,
+    /// and so a graph that has been searched or built stays reachable for as long
+    /// as those threads live: the nodes, the item list with every vector of the
+    /// segment, and the pool itself. Emptying the pool breaks that.
+    /// <para>
+    /// HNSW (26.9.5494) has no public way to do it, so this reaches the private
+    /// members <c>SmallWorld.Graph</c>, <c>Graph.GraphCore</c> and
+    /// <c>Core.SearcherPool</c>. If a later version of the package renames them
+    /// this does nothing and the graph leaks again;
+    /// <c>KnnSegmentTests.ADisposedSegment_LetsItsGraphBeCollected</c> fails
+    /// when that happens.
+    /// </para>
+    /// </remarks>
+    private static void ReleaseGraph(SmallWorld<float[], float> graph)
+    {
+        const BindingFlags AnyInstance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+        var inner = GraphField?.GetValue(graph);
+        var core = inner?.GetType().GetField("GraphCore", AnyInstance)?.GetValue(inner);
+        var pool = core?.GetType().GetField("SearcherPool", AnyInstance)?.GetValue(core);
+        pool?.GetType().GetMethod("Clear", Type.EmptyTypes)?.Invoke(pool, null);
     }
 
     private static Func<float[], float[], float> GetDistanceFunction(VectorDistanceFunction distance)
@@ -232,9 +295,18 @@ internal class LuceneVectorIndex : IDisposable
 
     public void Dispose()
     {
+        SmallWorld<float[], float>? graph;
+
         // The vectors stay as they are: a search or the graph build may be reading them.
-        _disposed = true;
-        _graph = null;
+        lock (_graphLock)
+        {
+            _disposed = true;
+            graph = _graph;
+            _graph = null;
+        }
+
+        if (graph != null)
+            ReleaseGraph(graph);
     }
 }
 #endif
