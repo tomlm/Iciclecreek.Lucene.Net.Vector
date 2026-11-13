@@ -272,6 +272,55 @@ public class KnnSegmentTests : VectorQueryTestBase
     }
 
     [Test]
+    public void ADisposedSegment_IsNotKeptByItsQueuedBuild()
+    {
+        var random = new Random(11);
+        AddSegment("a", 50, random);
+
+        using (LuceneVectorIndex.HoldBuildQueue())
+        {
+            var index = QueueABuildThenDispose();
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            // The build is still waiting for its turn, and the index holds every vector of the segment.
+            Assert.That(index.IsAlive, Is.False);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private WeakReference QueueABuildThenDispose()
+    {
+        using var reader = DirectoryReader.Open(_directory);
+        var index = VectorIndexCache.GetOrBuild(reader.Leaves[0].AtomicReader, "embedding", AlwaysGraph);
+        Assert.That(index.Count, Is.EqualTo(50));
+        return new WeakReference(index);
+    }
+
+    [Test]
+    public void DisposingASegment_StopsItsRunningBuild()
+    {
+        var random = new Random(12);
+        AddSegment("a", 5000, random);
+
+        LuceneVectorIndex index;
+        using (var reader = DirectoryReader.Open(_directory))
+        {
+            index = VectorIndexCache.GetOrBuild(reader.Leaves[0].AtomicReader, "embedding");
+            Assert.That(SpinWait.SpinUntil(() => index.GraphBuildProgress > 0, TimeSpan.FromSeconds(60)), Is.True);
+        }
+
+        // Returns, rather than throws, once the build has stopped.
+        index.WaitForGraph();
+
+        Assert.That(index.IsDisposed, Is.True);
+        Assert.That(index.HasGraph, Is.False);
+        Assert.That(index.GraphBuildProgress, Is.LessThan(index.Count));
+    }
+
+    [Test]
     public void ADisposedSegment_LetsItsGraphBeCollected()
     {
         var random = new Random(10);

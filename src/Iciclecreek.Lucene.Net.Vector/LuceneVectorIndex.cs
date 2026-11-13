@@ -42,6 +42,7 @@ internal class LuceneVectorIndex : IDisposable
     private readonly List<float[]> _vectors = new();
     private readonly List<int> _docIds = new();
     private volatile bool _disposed;
+    private volatile int _graphBuildProgress;
 
     /// <summary>Held to publish the graph and to dispose, so that neither misses the other.</summary>
     private readonly object _graphLock = new();
@@ -60,6 +61,9 @@ internal class LuceneVectorIndex : IDisposable
     internal bool HasGraph => _graph != null;
 
     internal bool IsDisposed => _disposed;
+
+    /// <summary>How many vectors the graph build has placed so far.</summary>
+    internal int GraphBuildProgress => _graphBuildProgress;
 
     /// <summary>
     /// The item list inside the HNSW graph, which lives exactly as long as the
@@ -108,12 +112,47 @@ internal class LuceneVectorIndex : IDisposable
         {
             lock (BuildQueueLock)
             {
+                // The queue must not keep the vectors of a segment that is disposed
+                // while it waits, so it only knows this index weakly.
+                var queued = new WeakReference<LuceneVectorIndex>(this);
+
                 // Runs whether or not the build before it succeeded.
                 _graphBuild = _buildQueue.ContinueWith(
-                    _ => BuildGraph(), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+                    _ => BuildQueued(queued), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
                 _buildQueue = _graphBuild;
             }
         }
+    }
+
+    private static void BuildQueued(WeakReference<LuceneVectorIndex> queued)
+    {
+        if (queued.TryGetTarget(out var index))
+            index.BuildGraph();
+    }
+
+    /// <summary>
+    /// Keeps the graphs queued from now on from being built until the returned
+    /// object is disposed, so that a test can search a segment whose graph is
+    /// still waiting.
+    /// </summary>
+    internal static IDisposable HoldBuildQueue()
+    {
+        var hold = new BuildQueueHold();
+        lock (BuildQueueLock)
+        {
+            _buildQueue = _buildQueue.ContinueWith(
+                _ => hold.Released, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
+        }
+        return hold;
+    }
+
+    private sealed class BuildQueueHold : IDisposable
+    {
+        private readonly TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Released => _released.Task;
+
+        public void Dispose() => _released.TrySetResult();
     }
 
     /// <summary>
@@ -232,7 +271,16 @@ internal class LuceneVectorIndex : IDisposable
             parameters,
             _options.ThreadSafe);
 
-        graph.AddItems(_vectors, progressReporter: null);
+        try
+        {
+            graph.AddItems(_vectors, new StopWhenDisposed(this));
+        }
+        catch (OperationCanceledException)
+        {
+            // Disposed part way. Nothing was handed back to the graph's searcher
+            // pool, so the half-built graph is collected with no further help.
+            return;
+        }
 
         // The cache of distances only helps while the graph is built, and it is
         // far larger than the graph: 12 bytes for every pair of vectors, up to 3 GB.
@@ -249,6 +297,22 @@ internal class LuceneVectorIndex : IDisposable
 
         // Disposed while it was being built.
         ReleaseGraph(graph);
+    }
+
+    /// <summary>
+    /// HNSW reports after every vector it places. Throwing from here is the only
+    /// way to stop a build, which otherwise runs for minutes on a large segment
+    /// and holds up every graph queued behind it.
+    /// </summary>
+    private sealed class StopWhenDisposed(LuceneVectorIndex index) : IProgressReporter
+    {
+        public void Progress(int current, int total)
+        {
+            index._graphBuildProgress = current + 1;
+
+            if (index._disposed)
+                throw new OperationCanceledException();
+        }
     }
 
     private static readonly System.Reflection.FieldInfo? GraphField =
