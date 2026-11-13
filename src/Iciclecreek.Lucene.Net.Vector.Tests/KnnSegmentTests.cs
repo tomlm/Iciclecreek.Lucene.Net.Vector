@@ -198,15 +198,28 @@ public class KnnSegmentTests : VectorQueryTestBase
         using var reader = DirectoryReader.Open(_directory);
         var queryVector = RandomVector(random);
 
-        // Whether or not the graph is ready yet, the query answers, and with real neighbors.
-        var ids = Ids(new IndexSearcher(reader), new KnnVectorQuery("embedding", queryVector, 10, reader), 10);
-        Assert.That(ids.Intersect(ExactNearest(all, queryVector, 10)).Count(), Is.GreaterThanOrEqualTo(8));
+        LuceneVectorIndex index;
 
-        var index = VectorIndexCache.GetOrBuild(reader.Leaves[0].AtomicReader, "embedding");
+        // Keep the graph from being built, so that which path answers is not left to timing.
+        // The hold has to be in the queue before the first use of the segment queues its build.
+        using (LuceneVectorIndex.HoldBuildQueue())
+        {
+            index = VectorIndexCache.GetOrBuild(reader.Leaves[0].AtomicReader, "embedding");
+
+            // A query that waited for the graph would never come back here.
+            var search = Task.Run(() => Ids(new IndexSearcher(reader), new KnnVectorQuery("embedding", queryVector, 10, reader), 10));
+            Assert.That(search.Wait(TimeSpan.FromSeconds(60)), Is.True);
+
+            // Comparing one by one finds exactly the nearest, in order.
+            Assert.That(index.HasGraph, Is.False);
+            Assert.That(search.Result, Is.EqualTo(ExactNearest(all, queryVector, 10)));
+        }
+
         index.WaitForGraph();
         Assert.That(index.HasGraph, Is.True);
 
-        ids = Ids(new IndexSearcher(reader), new KnnVectorQuery("embedding", queryVector, 10, reader), 10);
+        // Through the graph the answer is approximate.
+        var ids = Ids(new IndexSearcher(reader), new KnnVectorQuery("embedding", queryVector, 10, reader), 10);
         Assert.That(ids.Intersect(ExactNearest(all, queryVector, 10)).Count(), Is.GreaterThanOrEqualTo(8));
     }
 
