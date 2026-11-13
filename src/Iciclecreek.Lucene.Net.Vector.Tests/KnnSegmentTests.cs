@@ -210,6 +210,27 @@ public class KnnSegmentTests : VectorQueryTestBase
     }
 
     [Test]
+    public void ABuiltGraph_DoesNotKeepItsConstructionCache()
+    {
+        var random = new Random(9);
+        AddSegment("a", 5000, random);
+
+        using var reader = DirectoryReader.Open(_directory);
+        var before = GC.GetTotalMemory(forceFullCollection: true);
+
+        KnnVectorQuery.Warmup(reader, "embedding");
+        Assert.That(VectorIndexCache.GetOrBuild(reader.Leaves[0].AtomicReader, "embedding").HasGraph, Is.True);
+
+        // 5,000 vectors of 16 floats and their graph are a few megabytes. The cache
+        // of distances that HNSW fills while it builds is 195 MB at this size.
+        var held = GC.GetTotalMemory(forceFullCollection: true) - before;
+        Assert.That(held, Is.LessThan(32 * 1024 * 1024));
+
+        var ids = Ids(new IndexSearcher(reader), new KnnVectorQuery("embedding", RandomVector(random), 10, reader), 10);
+        Assert.That(ids, Has.Count.EqualTo(10));
+    }
+
+    [Test]
     public void ASegmentWithoutVectors_IsSkipped()
     {
         var random = new Random(6);

@@ -211,6 +211,10 @@ internal class LuceneVectorIndex : IDisposable
 
         graph.AddItems(_vectors, progressReporter: null);
 
+        // The cache of distances only helps while the graph is built, and it is
+        // far larger than the graph: 12 bytes for every pair of vectors, up to 3 GB.
+        graph.DisableDistanceCache();
+
         if (!_disposed)
             _graph = graph;
     }
