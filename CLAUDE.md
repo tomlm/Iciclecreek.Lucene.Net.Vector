@@ -41,5 +41,5 @@ The project namespace `Iciclecreek.Lucene.Net.Vector` contains `Lucene.Net` as a
 ### Dependencies
 
 - `Lucene.Net` (4.8.0-beta00017) — no `Occur.FILTER` in 4.8, use `Occur.MUST` instead
-- `HNSW` (26.9.5494) — `SmallWorld<float[], float>`, `CosineDistance.SIMD`, `DefaultRandomGenerator.Instance` (no public constructor)
+- `HNSW` (26.11.7916) — `SmallWorld<float[], float>`, `CosineDistance.SIMD`, `DefaultRandomGenerator.Instance` (no public constructor)
 - HNSW `KNNSearch` filter is `Func<float[], bool>` (filters by vector item, not by index). Use `ReferenceEqualityComparer` to map vectors back to doc IDs

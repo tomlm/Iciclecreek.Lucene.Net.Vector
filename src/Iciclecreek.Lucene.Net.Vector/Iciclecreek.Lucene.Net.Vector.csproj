@@ -41,7 +41,7 @@
     <PackageReference Include="Lucene.Net" Version="4.8.0-beta00017" />
     <PackageReference Include="Lucene.Net.Queries" Version="4.8.0-beta00017" />
     <PackageReference Include="System.Numerics.Vectors" Version="4.6.1" Condition="'$(TargetFramework)' == 'netstandard2.0'" />
-    <PackageReference Include="HNSW" Version="26.9.5494" Condition="'$(TargetFramework)' == 'net10.0'" />
+    <PackageReference Include="HNSW" Version="26.11.7916" Condition="'$(TargetFramework)' == 'net10.0'" />
     <!-- Force patched MessagePack to resolve CVE-2026-48502; HNSW otherwise pulls the vulnerable 3.1.0 (fixed in 3.1.7). -->
     <PackageReference Include="MessagePack" Version="3.1.12" Condition="'$(TargetFramework)' == 'net10.0'" />
   </ItemGroup>
