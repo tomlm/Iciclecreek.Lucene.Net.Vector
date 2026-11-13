@@ -38,12 +38,31 @@ public class KnnVectorQuery : Query
     public int K => _k;
 
     /// <summary>
-    /// Build the HNSW index for every segment of the given reader and field, and wait
-    /// until it is ready. Without this the graphs are built in the background and
-    /// queries compare vectors one by one in the meantime, which is exact but slower
-    /// on a large index. Safe to call multiple times — subsequent calls are no-ops
-    /// for segments that are already built.
+    /// Load the vectors of every segment of the given reader and field, build the
+    /// HNSW graph of each segment that gets one, and wait until those graphs are
+    /// ready. Without this the graphs are built in the background and queries
+    /// compare vectors one by one in the meantime, which is exact but slower on a
+    /// large index.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A segment with fewer vectors than <see cref="VectorIndexOptions.MinimumGraphSize"/>
+    /// (1,000 by default) gets no graph, here or in a query. On an index made of
+    /// small segments this loads the vectors and builds nothing.
+    /// </para>
+    /// <para>
+    /// Pass the same <paramref name="options"/> as the queries will. An index is
+    /// kept per distinct set of option values, so warming up with other values
+    /// builds graphs those queries do not use.
+    /// </para>
+    /// <para>
+    /// Safe to call more than once: a segment whose graph is ready costs nothing.
+    /// A call still waits for a graph that is queued or being built, which can be
+    /// behind the graphs of other indexes in the process, since they are built
+    /// one at a time. If a graph failed to build, every call rethrows the failure
+    /// and queries on that segment go on comparing one by one.
+    /// </para>
+    /// </remarks>
     public static void Warmup(IndexReader reader, string field, VectorIndexOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(reader);
