@@ -134,6 +134,8 @@ var options = new VectorIndexOptions
 var query = new VectorQuery("embedding", queryVector, k: 10, reader, options);
 ```
 
+Use the same option values for every query on a field, and for `KnnVectorQuery.Warmup`. Options are compared by value, and each distinct set gets its own index of a segment, with its own copy of the vectors and its own graph. A query with different options is answered correctly, but it does not use what was built for the others.
+
 On runtimes without HNSW, options are accepted but ignored -- `CosineVectorQuery` is used instead.
 
 ### RAG (Retrieval-Augmented Generation)
@@ -209,7 +211,7 @@ var filteredRag = new BooleanQuery
 ## Notes
 
 - **Vectors are stored in Lucene** as `BinaryDocValuesField` (4 bytes per float, little-endian). The HNSW graph is an in-memory acceleration structure built automatically from DocValues.
-- **HNSW caching** — vectors and their graph are cached per `(index segment, fieldName)` and shared by every reader that includes the segment. A commit adds a small segment, which is cheap to index; the existing segments keep their graphs. When Lucene merges segments, the merged segment is new and gets its own graph, built in the background while queries on it compare one by one.
+- **HNSW caching** — vectors and their graph are cached per `(index segment, fieldName, options)` and shared by every reader that includes the segment. A commit adds a small segment, which is cheap to index; the existing segments keep their graphs. When Lucene merges segments, the merged segment is new and gets its own graph, built in the background while queries on it compare one by one.
 - **Small segments** (fewer than `MinimumGraphSize` vectors, 1,000 by default) get no graph and are always compared one by one.
 - **Deleted documents** are automatically excluded — a segment's index holds all of its documents, and each search skips the ones deleted in its reader.
 - **Vectors changed in place** with `IndexWriter.UpdateBinaryDocValue` are not picked up, because that does not create a new segment. Replace the document instead.

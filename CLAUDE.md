@@ -24,7 +24,7 @@ dotnet test src/Iciclecreek.Lucene.Net.Vector.Tests --filter "FullyQualifiedName
 
 ### Public API
 
-- **KnnVectorQuery** — `Lucene.Net.Search.Query` subclass. Takes `(field, queryVector, k, reader, options?)`. HNSW index built/cached automatically per `(segment, field)` via internal `VectorIndexCache`; results of all segments are merged to the top K.
+- **KnnVectorQuery** — `Lucene.Net.Search.Query` subclass. Takes `(field, queryVector, k, reader, options?)`. HNSW index built/cached automatically per `(segment, field, option values)` via internal `VectorIndexCache`, so callers with different options get separate indexes; results of all segments are merged to the top K.
 - **VectorSerializer** — `float[] ↔ byte[] ↔ BytesRef` conversion for `BinaryDocValuesField` storage.
 - **VectorIndexOptions** — HNSW tuning (M, ConstructionPruning, EfSearch, Distance, MinimumGraphSize).
 - **SearchResult** — `(DocId, Distance, Score)` record struct.

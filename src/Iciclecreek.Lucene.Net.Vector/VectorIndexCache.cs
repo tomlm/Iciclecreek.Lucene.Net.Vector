@@ -5,7 +5,7 @@ using global::Lucene.Net.Index;
 namespace Iciclecreek.Lucene.Net.Vector;
 
 /// <summary>
-/// Caches vector indexes per (segment, fieldName) pair.
+/// Caches vector indexes per (segment, fieldName, options).
 /// A segment never changes once written, so its index stays valid across
 /// every reader that includes the segment: after a commit, only the segments
 /// that are new have an index built.
@@ -17,6 +17,12 @@ namespace Iciclecreek.Lucene.Net.Vector;
 /// documents are passed to each search instead. Neither does updating a
 /// doc value in place (<c>IndexWriter.UpdateBinaryDocValue</c>), so a vector
 /// changed that way is not seen: replace the document instead.
+/// <para>
+/// Callers that pass different option values for the same segment and field
+/// each get an index of their own, with its own copy of the vectors. Sharing
+/// one would give every caller after the first the first caller's distance
+/// function and graph settings for as long as the segment lives.
+/// </para>
 /// </remarks>
 internal static class VectorIndexCache
 {
@@ -24,25 +30,28 @@ internal static class VectorIndexCache
     // the key is GC'd, the cache entry is automatically cleaned up. Its HNSW graph is
     // only let go when the segment is disposed (see LuceneVectorIndex.ReleaseGraph),
     // so a reader that is dropped without being disposed leaves its graphs behind.
-    private static readonly ConditionalWeakTable<object, Dictionary<string, LuceneVectorIndex>> _cache = new();
+    private static readonly ConditionalWeakTable<object, Dictionary<IndexKey, LuceneVectorIndex>> _cache = new();
     private static readonly object _lock = new();
     private static readonly SegmentDisposedListener _disposedListener = new();
 
     /// <summary>
-    /// Get or build the vector index for the given segment and field.
-    /// Thread-safe: concurrent callers for the same (segment, field) will block
-    /// until the first caller finishes building.
+    /// Get or build the vector index for the given segment, field and options.
+    /// No options is the same as the default options, and options are compared
+    /// by their values, not by instance.
+    /// Thread-safe: concurrent callers for the same segment will block until the
+    /// first caller has loaded the vectors. Nobody waits for a graph.
     /// </summary>
     internal static LuceneVectorIndex GetOrBuild(AtomicReader segment, string fieldName, VectorIndexOptions? options = null)
     {
         var key = segment.CoreCacheKey;
-        Dictionary<string, LuceneVectorIndex>? fieldMap;
+        var indexKey = new IndexKey(fieldName, options ?? new VectorIndexOptions());
+        Dictionary<IndexKey, LuceneVectorIndex>? fieldMap;
 
         lock (_lock)
         {
             if (!_cache.TryGetValue(key, out fieldMap))
             {
-                fieldMap = new Dictionary<string, LuceneVectorIndex>();
+                fieldMap = new Dictionary<IndexKey, LuceneVectorIndex>();
                 _cache.Add(key, fieldMap);
 
                 // The core of a segment outlives any one reader of it.
@@ -55,19 +64,21 @@ internal static class VectorIndexCache
 
         lock (fieldMap)
         {
-            if (fieldMap.TryGetValue(fieldName, out var existing))
+            if (fieldMap.TryGetValue(indexKey, out var existing))
                 return existing;
 
-            var index = new LuceneVectorIndex(fieldName, options);
+            // A copy, so that the index keeps the values it is filed under
+            // whatever the caller does with its options object afterwards.
+            var index = new LuceneVectorIndex(fieldName, indexKey.ToOptions());
             index.BuildIndex(segment);
-            fieldMap[fieldName] = index;
+            fieldMap[indexKey] = index;
             return index;
         }
     }
 
     private static void Remove(object key)
     {
-        Dictionary<string, LuceneVectorIndex>? fieldMap;
+        Dictionary<IndexKey, LuceneVectorIndex>? fieldMap;
 
         lock (_lock)
         {
@@ -87,6 +98,32 @@ internal static class VectorIndexCache
 
         foreach (var index in indexesToDispose)
             index.Dispose();
+    }
+
+    /// <summary>The field and every option value an index is built from.</summary>
+    private readonly record struct IndexKey(
+        string Field,
+        int M,
+        int ConstructionPruning,
+        int EfSearch,
+        VectorDistanceFunction Distance,
+        bool ThreadSafe,
+        int MinimumGraphSize)
+    {
+        public IndexKey(string field, VectorIndexOptions options)
+            : this(field, options.M, options.ConstructionPruning, options.EfSearch, options.Distance, options.ThreadSafe, options.MinimumGraphSize)
+        {
+        }
+
+        public VectorIndexOptions ToOptions() => new()
+        {
+            M = M,
+            ConstructionPruning = ConstructionPruning,
+            EfSearch = EfSearch,
+            Distance = Distance,
+            ThreadSafe = ThreadSafe,
+            MinimumGraphSize = MinimumGraphSize,
+        };
     }
 
     private sealed class SegmentDisposedListener : SegmentReader.ICoreDisposedListener, IReaderDisposedListener

@@ -101,7 +101,7 @@ public class KnnSegmentTests : VectorQueryTestBase
         Assert.That(ids, Has.Count.EqualTo(10));
         foreach (var leaf in reader.Leaves)
         {
-            Assert.That(VectorIndexCache.GetOrBuild(leaf.AtomicReader, "embedding").HasGraph, Is.True);
+            Assert.That(VectorIndexCache.GetOrBuild(leaf.AtomicReader, "embedding", AlwaysGraph).HasGraph, Is.True);
         }
 
         // A graph search is approximate; nearly all of the true nearest should be found.
@@ -119,7 +119,7 @@ public class KnnSegmentTests : VectorQueryTestBase
         using (var reader = DirectoryReader.Open(_directory))
         {
             KnnVectorQuery.Warmup(reader, "embedding", AlwaysGraph);
-            before = VectorIndexCache.GetOrBuild(reader.Leaves[0].AtomicReader, "embedding");
+            before = VectorIndexCache.GetOrBuild(reader.Leaves[0].AtomicReader, "embedding", AlwaysGraph);
 
             IndexDocuments(("new", RandomVector(random), null));
 
@@ -132,8 +132,8 @@ public class KnnSegmentTests : VectorQueryTestBase
 
             Assert.That(ids, Has.Count.EqualTo(301));
             Assert.That(ids, Does.Contain("new"));
-            Assert.That(VectorIndexCache.GetOrBuild(reopened.Leaves[0].AtomicReader, "embedding"), Is.SameAs(before));
-            Assert.That(VectorIndexCache.GetOrBuild(reopened.Leaves[1].AtomicReader, "embedding").Count, Is.EqualTo(1));
+            Assert.That(VectorIndexCache.GetOrBuild(reopened.Leaves[0].AtomicReader, "embedding", AlwaysGraph), Is.SameAs(before));
+            Assert.That(VectorIndexCache.GetOrBuild(reopened.Leaves[1].AtomicReader, "embedding", AlwaysGraph).Count, Is.EqualTo(1));
         }
     }
 
@@ -148,7 +148,7 @@ public class KnnSegmentTests : VectorQueryTestBase
         KnnVectorQuery.Warmup(reader, "embedding", AlwaysGraph);
         var first = Ids(new IndexSearcher(reader), new KnnVectorQuery("embedding", queryVector, 5, reader, AlwaysGraph), 5);
         Assert.That(first[0], Is.EqualTo("a7"));
-        var index = VectorIndexCache.GetOrBuild(reader.Leaves[0].AtomicReader, "embedding");
+        var index = VectorIndexCache.GetOrBuild(reader.Leaves[0].AtomicReader, "embedding", AlwaysGraph);
 
         Delete(new Term("id", "a7"));
 
@@ -159,7 +159,7 @@ public class KnnSegmentTests : VectorQueryTestBase
 
         Assert.That(second, Has.Count.EqualTo(5));
         Assert.That(second, Does.Not.Contain("a7"));
-        Assert.That(VectorIndexCache.GetOrBuild(reopened!.Leaves[0].AtomicReader, "embedding"), Is.SameAs(index));
+        Assert.That(VectorIndexCache.GetOrBuild(reopened!.Leaves[0].AtomicReader, "embedding", AlwaysGraph), Is.SameAs(index));
 
         // The reader from before the delete still sees the document.
         var again = Ids(new IndexSearcher(reader), new KnnVectorQuery("embedding", queryVector, 5, reader, AlwaysGraph), 5);
@@ -176,7 +176,7 @@ public class KnnSegmentTests : VectorQueryTestBase
         using var reader = DirectoryReader.Open(_directory);
         Assert.That(reader.NumDocs, Is.EqualTo(100));
         KnnVectorQuery.Warmup(reader, "embedding", AlwaysGraph);
-        Assert.That(VectorIndexCache.GetOrBuild(reader.Leaves[0].AtomicReader, "embedding").HasGraph, Is.True);
+        Assert.That(VectorIndexCache.GetOrBuild(reader.Leaves[0].AtomicReader, "embedding", AlwaysGraph).HasGraph, Is.True);
 
         var queryVector = RandomVector(random);
         var searcher = new IndexSearcher(reader);
@@ -229,6 +229,39 @@ public class KnnSegmentTests : VectorQueryTestBase
 
         var ids = Ids(new IndexSearcher(reader), new KnnVectorQuery("embedding", RandomVector(random), 10, reader), 10);
         Assert.That(ids, Has.Count.EqualTo(10));
+    }
+
+    [Test]
+    public void EveryCaller_GetsTheOptionsItPassed()
+    {
+        var random = new Random(13);
+        AddSegment("a", 500, random);
+
+        using var reader = DirectoryReader.Open(_directory);
+        var segment = reader.Leaves[0].AtomicReader;
+        var queryVector = RandomVector(random);
+
+        // The first caller passes no options, and 500 vectors are too few for a graph by default.
+        var ids = Ids(new IndexSearcher(reader), new KnnVectorQuery("embedding", queryVector, 10, reader), 10);
+        Assert.That(ids, Has.Count.EqualTo(10));
+        var byDefault = VectorIndexCache.GetOrBuild(segment, "embedding");
+        Assert.That(byDefault.HasGraph, Is.False);
+
+        // A later caller that asks for a graph gets one.
+        KnnVectorQuery.Warmup(reader, "embedding", AlwaysGraph);
+        Assert.That(VectorIndexCache.GetOrBuild(segment, "embedding", AlwaysGraph).HasGraph, Is.True);
+        Assert.That(byDefault.HasGraph, Is.False);
+
+        // The same values share one index, whichever object carries them.
+        Assert.That(VectorIndexCache.GetOrBuild(segment, "embedding", AlwaysGraph), Is.SameAs(VectorIndexCache.GetOrBuild(segment, "embedding", AlwaysGraph)));
+        Assert.That(VectorIndexCache.GetOrBuild(segment, "embedding", new VectorIndexOptions()), Is.SameAs(byDefault));
+
+        // These vectors are not of unit length, so the distance for unit vectors differs from the cosine distance.
+        var forUnits = VectorIndexCache.GetOrBuild(segment, "embedding", new VectorIndexOptions { Distance = VectorDistanceFunction.CosineForUnits });
+        Assert.That(forUnits, Is.Not.SameAs(byDefault));
+        Assert.That(
+            forUnits.Search(queryVector, 1)[0].Distance,
+            Is.Not.EqualTo(byDefault.Search(queryVector, 1)[0].Distance).Within(0.01f));
     }
 
     [Test]
@@ -347,7 +380,7 @@ public class KnnSegmentTests : VectorQueryTestBase
         using var reader = DirectoryReader.Open(_directory);
         KnnVectorQuery.Warmup(reader, "embedding", AlwaysGraph);
 
-        var index = VectorIndexCache.GetOrBuild(reader.Leaves[0].AtomicReader, "embedding");
+        var index = VectorIndexCache.GetOrBuild(reader.Leaves[0].AtomicReader, "embedding", AlwaysGraph);
         var graphItems = index.GraphItems;
         Assert.That(graphItems, Is.Not.Null);
 
