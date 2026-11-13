@@ -262,11 +262,12 @@ public class KnnSegmentTests : VectorQueryTestBase
 
         // A later caller that asks for a graph gets one.
         KnnVectorQuery.Warmup(reader, "embedding", AlwaysGraph);
-        Assert.That(VectorIndexCache.GetOrBuild(segment, "embedding", AlwaysGraph).HasGraph, Is.True);
+        var withGraph = VectorIndexCache.GetOrBuild(segment, "embedding", AlwaysGraph);
+        Assert.That(withGraph.HasGraph, Is.True);
         Assert.That(byDefault.HasGraph, Is.False);
 
         // The same values share one index, whichever object carries them.
-        Assert.That(VectorIndexCache.GetOrBuild(segment, "embedding", AlwaysGraph), Is.SameAs(VectorIndexCache.GetOrBuild(segment, "embedding", AlwaysGraph)));
+        Assert.That(VectorIndexCache.GetOrBuild(segment, "embedding", new VectorIndexOptions { MinimumGraphSize = 0 }), Is.SameAs(withGraph));
         Assert.That(VectorIndexCache.GetOrBuild(segment, "embedding", new VectorIndexOptions()), Is.SameAs(byDefault));
 
         // These vectors are not of unit length, so the distance for unit vectors differs from the cosine distance.
