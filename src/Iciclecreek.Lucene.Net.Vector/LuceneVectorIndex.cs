@@ -14,15 +14,17 @@ namespace Iciclecreek.Lucene.Net.Vector;
 /// Built and cached automatically per (segment, fieldName) via VectorIndexCache.
 /// </summary>
 /// <remarks>
+/// <para>
 /// The graph is built in the background, because building one takes seconds to
 /// minutes. Until it is ready, searches compare the vectors one by one, which
 /// gives the exact nearest neighbors.
-/// </remarks>
-/// <remarks>
+/// </para>
+/// <para>
 /// A segment never changes once written, except that documents in it get
 /// deleted. So the index holds every document of the segment, deleted or not,
 /// and each search passes the documents that are live for its reader.
 /// Document ids are the segment's own.
+/// </para>
 /// </remarks>
 internal class LuceneVectorIndex : IDisposable
 {
