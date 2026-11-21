@@ -65,7 +65,7 @@ public class CosineVectorQuery : Query
     {
         private readonly CosineVectorQuery _query;
         private readonly IndexSearcher _searcher;
-        private Dictionary<int, float> _scores;
+        private Dictionary<int, float>? _scores;
 
         public CosineVectorWeight(CosineVectorQuery query, IndexSearcher searcher)
             : base()
@@ -79,8 +79,7 @@ public class CosineVectorQuery : Query
         public override Explanation Explain(AtomicReaderContext context, int doc)
         {
             var globalDocId = context.DocBase + doc;
-            EnsureScoresComputed();
-            if (_scores.TryGetValue(globalDocId, out var score))
+            if (Scores().TryGetValue(globalDocId, out var score))
             {
                 return new Explanation(score, $"CosineVectorQuery(field={_query._field}, k={_query._k}), cosine similarity score");
             }
@@ -96,15 +95,14 @@ public class CosineVectorQuery : Query
         {
         }
 
-        public override Scorer GetScorer(AtomicReaderContext context, IBits acceptDocs)
+        // Null when no document of the segment matches, as Lucene expects of a weight.
+        public override Scorer? GetScorer(AtomicReaderContext context, IBits acceptDocs)
         {
-            EnsureScoresComputed();
-
             var segmentResults = new List<(int Doc, float Score)>();
             int docBase = context.DocBase;
             int maxDoc = context.AtomicReader.MaxDoc;
 
-            foreach (var kvp in _scores)
+            foreach (var kvp in Scores())
             {
                 int localDoc = kvp.Key - docBase;
                 if (localDoc < 0 || localDoc >= maxDoc)
@@ -123,11 +121,11 @@ public class CosineVectorQuery : Query
             return new CosineVectorScorer(this, segmentResults);
         }
 
-        private void EnsureScoresComputed()
-        {
-            if (_scores != null)
-                return;
+        /// <summary>The score of each of the K nearest documents, by global doc id: worked out the first time it is asked for.</summary>
+        private Dictionary<int, float> Scores() => _scores ??= ComputeScores();
 
+        private Dictionary<int, float> ComputeScores()
+        {
             var queryVector = _query._queryVector;
             var queryNorm = VectorMath.Norm(queryVector);
             var boost = _query.Boost;
@@ -171,11 +169,12 @@ public class CosineVectorQuery : Query
             allResults.Sort((a, b) => a.Distance.CompareTo(b.Distance));
             var topK = Math.Min(_query._k, allResults.Count);
 
-            _scores = new Dictionary<int, float>(topK);
+            var scores = new Dictionary<int, float>(topK);
             for (int i = 0; i < topK; i++)
             {
-                _scores[allResults[i].DocId] = allResults[i].Score * boost;
+                scores[allResults[i].DocId] = allResults[i].Score * boost;
             }
+            return scores;
         }
     }
 
