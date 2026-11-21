@@ -16,7 +16,7 @@ public class VectorQuery : Query
 {
     private readonly Query _inner;
 
-    public VectorQuery(string field, float[] queryVector, int k, IndexReader reader, VectorIndexOptions options = null)
+    public VectorQuery(string field, float[] queryVector, int k, IndexReader reader, VectorIndexOptions? options = null)
     {
 #if NET10_0_OR_GREATER
         _inner = new KnnVectorQuery(field, queryVector, k, reader, options);
